@@ -16,14 +16,20 @@ DECK//MSG   # Nyx                                         ● ONLINE  22:01:02
   Tab completes commands and channel names, and Up/Down recalls history.
 - **Keyboard first:** Alt+↑/↓ switches channels and Ctrl+L clears the screen. On phones, a slide-out channel
   drawer and a send button take over.
-- **Real Messenger chats:** through the [mautrix-meta](https://github.com/mautrix/meta) bridge on your own
-  Matrix homeserver, with images, emotes, unread counts and read receipts. Encrypted rooms are supported for messages sent after you log in.
+- **Real Messenger chats:** through the [mautrix-meta](https://github.com/mautrix/meta) bridge on a free cloud
+  VM, set up with one command. Images, emotes, unread counts and read receipts work.
 - **Demo mode:** a built-in offline backend with fictional contacts for trying the UI with no setup.
 
 ## Why a bridge?
 
 Meta has no public API for personal Messenger accounts. DeckMessages is a [Matrix](https://matrix.org) client,
-and a self-hosted bridge relays your Messenger chats into Matrix. **Setup guide: [docs/BRIDGE.md](docs/BRIDGE.md).**
+and a bridge relays your Messenger chats into Matrix. It runs on a free cloud VM (no hardware or domain needed):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Eidhaart/DeckMessages/HEAD/server/install.sh | sudo bash
+```
+
+**Step-by-step guide, including creating the free VM: [docs/SERVER.md](docs/SERVER.md).**
 
 ## Stack
 
@@ -39,7 +45,7 @@ src/
   transport/demo.ts     offline demo backend
   components/           boot, login, sidebar, log, prompt
 src-tauri/              native shell (desktop + Android)
-bridge/                 docker-compose for Synapse + mautrix-meta
+server/install.sh       one-command server setup (Synapse + bridge + HTTPS)
 ```
 
 ## Development

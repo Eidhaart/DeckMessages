@@ -16,6 +16,7 @@ export interface CommandContext {
   setBoot(on: boolean): void;
   loadOlder(): void;
   accept(roomId: string): void;
+  openBridge(): void;
   logout(): void;
   reboot(): void;
 }
@@ -91,13 +92,7 @@ const COMMANDS: Record<string, Command> = {
     help: "open the Messenger bridge bot",
     run: (_a, ctx) => {
       if (ctx.transportKind === "demo") return ctx.print("demo mode has no bridge. /logout and connect a homeserver.");
-      const bot = ctx.rooms.find((r) => r.bridgeBot);
-      if (!bot) {
-        ctx.print("no bridge bot room found. start a DM with @metabot:<your-server> in any Matrix client,");
-        return ctx.print("or check the bot name you entered at login. see docs/BRIDGE.md");
-      }
-      ctx.select(bot.id);
-      ctx.print("bridge console. send `help` for bot commands, `login` to link Messenger.");
+      ctx.openBridge();
     },
   },
   clear: { usage: "/clear", help: "clear the screen", aliases: ["cls"], run: (_a, ctx) => ctx.clear() },

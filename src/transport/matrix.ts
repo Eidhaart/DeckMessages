@@ -6,6 +6,7 @@ import {
   MatrixEventEvent,
   MsgType,
   NotificationCountType,
+  Preset,
   RoomEvent,
   SyncState,
   type MatrixClient,
@@ -23,7 +24,7 @@ export interface MatrixSession {
   userId: string;
   accessToken: string;
   deviceId: string;
-  /** Localpart of the bridge bot, "metabot" by default in mautrix-meta. */
+  /** Localpart of the bridge bot, "facebookbot" by default in mautrix-meta. */
   bridgeBot: string;
   /** Auto-accept invites to new portal rooms created by the bridge. */
   autoJoin: boolean;
@@ -201,9 +202,24 @@ export class MatrixTransport implements Transport {
     return url;
   }
 
+  /** Open a DM with the bridge bot (the room where you log in to Messenger). */
+  async openBridge(): Promise<string> {
+    const existing = this.rooms().find((r) => r.bridgeBot);
+    if (existing) return existing.id;
+    const server = this.selfId.slice(this.selfId.indexOf(":") + 1);
+    const res = await this.client.createRoom({
+      invite: [`@${this.session.bridgeBot}:${server}`],
+      is_direct: true,
+      preset: Preset.TrustedPrivateChat,
+      name: "Messenger bridge",
+    });
+    this.em.emit({ type: "rooms" });
+    return res.room_id;
+  }
+
   private isBridgeBotRoom(room: MRoom) {
     const bot = `@${this.session.bridgeBot}:`;
-    const members = room.getJoinedMembers();
+    const members = room.getMembers().filter((m) => m.membership === "join" || m.membership === "invite");
     return members.length <= 2 && members.some((m) => m.userId.startsWith(bot));
   }
 

@@ -137,6 +137,20 @@ export default function App() {
     setBoot: (boot) => updateSettings({ boot }),
     loadOlder: () => activeId && void transport?.loadOlder(activeId),
     accept: (id) => transport?.acceptInvite(id).then(() => print("invite accepted"), (e) => print(`!! ${e.message}`)),
+    openBridge: () => {
+      if (!transport?.openBridge) return;
+      print("opening bridge console…");
+      transport.openBridge().then(
+        (id) => {
+          select(id);
+          setSysLines((l) => [
+            ...l,
+            sysLine(id, "bridge console. send `login` to link Messenger, `help` for bot commands."),
+          ]);
+        },
+        (e) => print(`!! couldn't reach the bridge bot: ${e?.message ?? e}`),
+      );
+    },
     logout: () => void logout(),
     reboot: () => {
       setActiveId(null);

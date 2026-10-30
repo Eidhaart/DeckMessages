@@ -10,7 +10,7 @@ export function LoginScreen({ onSession, onDemo }: Props) {
   const [baseUrl, setBaseUrl] = useState("https://");
   const [user, setUser] = useState("");
   const [password, setPassword] = useState("");
-  const [bridgeBot, setBridgeBot] = useState("metabot");
+  const [bridgeBot, setBridgeBot] = useState("facebookbot");
   const [autoJoin, setAutoJoin] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +21,7 @@ export function LoginScreen({ onSession, onDemo }: Props) {
     setError(null);
     try {
       const creds = await matrixLogin(baseUrl, user, password);
-      onSession({ ...creds, bridgeBot: bridgeBot.trim() || "metabot", autoJoin });
+      onSession({ ...creds, bridgeBot: bridgeBot.trim() || "facebookbot", autoJoin });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -35,7 +35,7 @@ export function LoginScreen({ onSession, onDemo }: Props) {
         <div className="panel-title">// JACK IN</div>
         <p className="dim">
           Messenger has no public API for personal chats, so the deck reaches it through your own Matrix homeserver
-          running the <span className="accent">mautrix-meta</span> bridge. Setup: <code>docs/BRIDGE.md</code>.
+          running the <span className="accent">mautrix-meta</span> bridge. One-command setup: <code>docs/SERVER.md</code>.
         </p>
         <form onSubmit={submit}>
           <label>

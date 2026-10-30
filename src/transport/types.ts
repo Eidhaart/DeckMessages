@@ -46,6 +46,8 @@ export interface Transport {
   markRead(roomId: string): void;
   loadOlder(roomId: string): Promise<void>;
   acceptInvite(roomId: string): Promise<void>;
+  /** Open (creating if needed) the chat with the Messenger bridge bot; returns its room id. */
+  openBridge?(): Promise<string>;
   /** Resolve a media URL into something an <img> can display. */
   fetchMedia(url: string): Promise<string>;
   on(listener: (e: TransportEvent) => void): () => void;
