@@ -1,0 +1,71 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 29.0.14206865
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager "ndk;$NDK_VERSION"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Build APK
+        run: NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" npx tauri android build --apk --target aarch64
+
+      # Signs with your key when the ANDROID_KEYSTORE_* secrets are set, so new builds
+      # install over old ones. Without them a throwaway key is used (uninstall before updating).
+      - name: Sign APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          IN=src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.jks
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 not set; signing with a throwaway key"
+            KEYSTORE_PASSWORD=throwaway KEY_ALIAS=deck
+            keytool -genkeypair -keystore release.jks -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=DeckMessages"
+          fi
+          "$BT/zipalign" -f -p 4 "$IN" aligned.apk
+          "$BT/apksigner" sign --ks release.jks --ks-pass "pass:$KEYSTORE_PASSWORD" --ks-key-alias "${KEY_ALIAS:-deck}" \
+            --out DeckMessages-arm64.apk aligned.apk
+          "$BT/apksigner" verify DeckMessages-arm64.apk
+          rm release.jks
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DeckMessages-android
+          path: DeckMessages-arm64.apk

@@ -56,13 +56,27 @@ npm run tauri build    # installers in src-tauri/target/release/bundle/
 
 ### Android
 
-Needs Android Studio (SDK and NDK), `JAVA_HOME`, `ANDROID_HOME`, `NDK_HOME`, and the Rust Android targets:
+**Easiest way to get the APK:** every push runs the *Android APK* workflow. Open the run under the repo's
+**Actions** tab, download the `DeckMessages-android` artifact, unzip it, and install the APK on your phone
+(allow installs from unknown sources when asked).
+
+To keep updates installing over the old version, sign every build with the same key by adding these repo secrets:
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 release.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
+| `ANDROID_KEY_ALIAS` | key alias |
+
+Without them, each build gets a throwaway key and you'll need to uninstall before installing a new build.
+
+**Building locally** needs the Android SDK and NDK, `JAVA_HOME`, `ANDROID_HOME`, `NDK_HOME`, and the Rust target.
+The Android project is already generated in `src-tauri/gen/android`.
 
 ```bash
-rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
-npm run tauri android init      # generates src-tauri/gen/android (once)
-npm run tauri android dev       # run on an emulator or a USB-connected phone
-npm run tauri android build -- --apk
+rustup target add aarch64-linux-android
+npm run tauri android dev                              # run on a USB-connected phone or an emulator
+npm run tauri android build -- --apk --target aarch64  # unsigned APK, sign with apksigner
 ```
 
 The phone must reach your homeserver over **HTTPS**.

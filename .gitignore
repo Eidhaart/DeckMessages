@@ -7,3 +7,4 @@ src-tauri/gen/schemas/
 bridge/data/
 bridge/synapse/
 bridge/postgres/
+release/
