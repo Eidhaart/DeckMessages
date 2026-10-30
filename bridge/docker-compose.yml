@@ -1,0 +1,37 @@
+# Self-hosted Matrix homeserver + Facebook Messenger bridge for DeckMessages.
+# Full walkthrough: docs/BRIDGE.md
+#
+# Put this behind a reverse proxy with HTTPS (Caddy, Traefik, nginx) before
+# pointing the Android app at it; only port 8008 needs to be exposed.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: deck
+      POSTGRES_PASSWORD: change-me
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+      - ./init-bridge-db.sql:/docker-entrypoint-initdb.d/init-bridge-db.sql:ro
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    restart: unless-stopped
+    depends_on: [postgres]
+    environment:
+      SYNAPSE_SERVER_NAME: ${SERVER_NAME:?set SERVER_NAME in .env}
+      SYNAPSE_REPORT_STATS: "no"
+    volumes:
+      - ./synapse:/data
+    ports:
+      - "8008:8008"
+
+  mautrix-meta:
+    image: dock.mau.dev/mautrix/meta:latest
+    restart: unless-stopped
+    depends_on: [synapse, postgres]
+    volumes:
+      - ./data/meta:/data
