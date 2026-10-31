@@ -168,7 +168,7 @@ export class MatrixTransport implements Transport {
         const named = r.currentState.getStateEvents(EventType.RoomName, "")?.getContent().name;
         return {
           id: r.roomId,
-          name: (!named && peer?.name) || r.name || r.roomId,
+          name: (!named && peer?.rawDisplayName) || r.name || r.roomId,
           unread: r.getUnreadNotificationCount(NotificationCountType.Total) ?? 0,
           lastTs: r.getLastActiveTimestamp() || 0,
           invite: r.getMyMembership() === KnownMembership.Invite,
@@ -191,7 +191,7 @@ export class MatrixTransport implements Transport {
         if (byId.has(m.userId)) continue;
         byId.set(m.userId, {
           id: m.userId,
-          name: m.name,
+          name: m.rawDisplayName,
           avatarUrl: m.getMxcAvatarUrl() ?? undefined,
           roomId: dmWith.get(m.userId),
         });
@@ -369,6 +369,11 @@ export class MatrixTransport implements Transport {
     return isDirect || people.length <= 1 ? "dm" : "group";
   }
 
+  /** One name for you, whether you wrote from DeckMessages or the Messenger app. */
+  private selfName(room: MRoom | null) {
+    return room?.getMember(this.selfId)?.rawDisplayName ?? this.client.getUser(this.selfId)?.displayName ?? "you";
+  }
+
   private status(ev: MatrixEvent, room: MRoom | null): MessageStatus {
     if (ev.status === EventStatus.NOT_SENT) return "failed";
     if (ev.status) return "sending";
@@ -384,15 +389,18 @@ export class MatrixTransport implements Transport {
     const sender = ev.getSender() ?? "?";
     const room = this.client.getRoom(roomId);
     const member = room?.getMember(sender);
-    const self = sender === this.selfId;
+    // Messages you wrote in the Messenger app arrive from the bridge's stand-in for you: still you.
+    const mine = sender === this.selfId;
+    const self = mine || this.isOwnGhost(sender);
     const base = {
       id: ev.getId() ?? `${roomId}-${ev.getTs()}`,
       roomId,
       sender,
-      senderName: member?.name ?? sender,
+      // rawDisplayName: the SDK's `name` appends the user ID when two members have similar names.
+      senderName: self ? this.selfName(room) : (member?.rawDisplayName ?? sender),
       ts: ev.getTs(),
       self,
-      status: self ? this.status(ev, room) : undefined,
+      status: mine ? this.status(ev, room) : undefined,
     };
 
     if (ev.isEncrypted() && (ev.isDecryptionFailure() || ev.getType() === EventType.RoomMessageEncrypted)) {
