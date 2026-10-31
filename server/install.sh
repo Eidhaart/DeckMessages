@@ -204,7 +204,10 @@ compose run --rm --no-deps -e DOMAIN="$DOMAIN" -e MXUSER="$MXUSER" \
     .database.type = "postgres" |
     .database.uri = strenv(DB_URI) |
     .bridge.permissions = {strenv(DOMAIN): "user", ("@" + strenv(MXUSER) + ":" + strenv(DOMAIN)): "admin"} |
-    .encryption.allow = false
+    .encryption.allow = false |
+    .backfill.enabled = true |
+    .backfill.max_initial_messages = 100 |
+    .network.e2ee_backfill = true
   ' /data/config.yaml
 
 if [[ ! -f bridge/registration.yaml ]]; then

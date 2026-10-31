@@ -17,15 +17,18 @@ export interface Message {
   mediaUrl?: string;
 }
 
+/** dm: one-to-one chat, group: group chat, bridge: the Messenger bridge bot's management room. */
+export type RoomKind = "dm" | "group" | "bridge";
+
 export interface Room {
   id: string;
   name: string;
   unread: number;
   lastTs: number;
+  kind: RoomKind;
+  favorite: boolean;
   /** Pending invite that hasn't been accepted yet. */
   invite?: boolean;
-  /** Management room with the bridge bot (where you log in to Messenger). */
-  bridgeBot?: boolean;
 }
 
 export type LinkStatus = "connecting" | "online" | "offline" | "error";
@@ -46,6 +49,7 @@ export interface Transport {
   markRead(roomId: string): void;
   loadOlder(roomId: string): Promise<void>;
   acceptInvite(roomId: string): Promise<void>;
+  setFavorite(roomId: string, favorite: boolean): Promise<void>;
   /** Open (creating if needed) the chat with the Messenger bridge bot; returns its room id. */
   openBridge?(): Promise<string>;
   /** Resolve a media URL into something an <img> can display. */

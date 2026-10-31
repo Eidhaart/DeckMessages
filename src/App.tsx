@@ -5,6 +5,7 @@ import { Log } from "./components/Log";
 import { Prompt } from "./components/Prompt";
 import { Sidebar } from "./components/Sidebar";
 import { runCommand, type CommandContext } from "./commands";
+import { groupRooms, type SectionId } from "./rooms";
 import { loadSession, loadSettings, saveSession, saveSettings, type Settings } from "./settings";
 import { DemoTransport } from "./transport/demo";
 import { MatrixTransport, type MatrixSession } from "./transport/matrix";
@@ -69,7 +70,8 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
-  const rooms = transport?.rooms() ?? [];
+  const sections = groupRooms(transport?.rooms() ?? []);
+  const rooms = sections.flatMap((s) => s.rooms);
   const activeRoom = rooms.find((r) => r.id === activeId) ?? null;
 
   // Land on the most recent channel once rooms arrive.
@@ -137,6 +139,9 @@ export default function App() {
     setBoot: (boot) => updateSettings({ boot }),
     loadOlder: () => activeId && void transport?.loadOlder(activeId),
     accept: (id) => transport?.acceptInvite(id).then(() => print("invite accepted"), (e) => print(`!! ${e.message}`)),
+    setFavorite: (id, favorite) => {
+      transport?.setFavorite(id, favorite).catch((e) => print(`!! couldn't update favorites: ${e?.message ?? e}`));
+    },
     openBridge: () => {
       if (!transport?.openBridge) return;
       print("opening bridge console…");
@@ -234,7 +239,21 @@ export default function App() {
       </header>
 
       <div className="deck-body">
-        <Sidebar rooms={rooms} activeId={activeId} open={sidebarOpen} onSelect={select} />
+        <Sidebar
+          sections={sections}
+          collapsed={settings.collapsed}
+          activeId={activeId}
+          open={sidebarOpen}
+          onSelect={select}
+          onToggleSection={(id: SectionId) =>
+            updateSettings({
+              collapsed: settings.collapsed.includes(id)
+                ? settings.collapsed.filter((c) => c !== id)
+                : [...settings.collapsed, id],
+            })
+          }
+          onToggleFavorite={(id, favorite) => ctx.setFavorite(id, favorite)}
+        />
         {sidebarOpen && <div className="scrim" onClick={() => setSidebarOpen(false)} />}
         <main className="main">
           {activeRoom?.invite && (

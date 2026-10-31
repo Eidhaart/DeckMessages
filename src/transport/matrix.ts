@@ -13,7 +13,9 @@ import {
   type MatrixEvent,
   type Room as MRoom,
 } from "matrix-js-sdk";
-import { Emitter, type Message, type Room, type Transport } from "./types";
+import { Emitter, type Message, type Room, type RoomKind, type Transport } from "./types";
+
+const FAVORITE_TAG = "m.favourite";
 
 // Messenger has no public API for personal chats, so DeckMessages reaches it
 // through a Matrix homeserver running the mautrix-meta bridge. Every Messenger
@@ -72,7 +74,7 @@ export class MatrixTransport implements Transport {
     const c = this.client;
     this.em.emit({ type: "status", status: "connecting", detail: "handshake" });
     if (this.wired) {
-      await c.startClient({ initialSyncLimit: 40, lazyLoadMembers: true });
+      await c.startClient({ initialSyncLimit: 40 });
       return;
     }
     this.wired = true;
@@ -109,6 +111,7 @@ export class MatrixTransport implements Transport {
 
     c.on(MatrixEventEvent.Decrypted, () => this.em.emit({ type: "rooms" }));
     c.on(RoomEvent.Name, () => this.em.emit({ type: "rooms" }));
+    c.on(RoomEvent.Tags, () => this.em.emit({ type: "rooms" }));
     c.on(RoomEvent.Receipt, () => this.em.emit({ type: "rooms" }));
     c.on(RoomEvent.MyMembership, (room: MRoom, membership: string) => {
       if (membership === KnownMembership.Invite && this.session.autoJoin) {
@@ -117,7 +120,7 @@ export class MatrixTransport implements Transport {
       this.em.emit({ type: "rooms" });
     });
 
-    await c.startClient({ initialSyncLimit: 40, lazyLoadMembers: true });
+    await c.startClient({ initialSyncLimit: 40 });
   }
 
   async stop() {
@@ -139,7 +142,8 @@ export class MatrixTransport implements Transport {
       .getVisibleRooms()
       .filter((r) => {
         const m = r.getMyMembership();
-        return m === KnownMembership.Join || m === KnownMembership.Invite;
+        // The bridge groups its rooms into a "space"; that's a folder, not a chat.
+        return (m === KnownMembership.Join || m === KnownMembership.Invite) && !r.isSpaceRoom();
       })
       .map((r) => ({
         id: r.roomId,
@@ -147,7 +151,8 @@ export class MatrixTransport implements Transport {
         unread: r.getUnreadNotificationCount(NotificationCountType.Total) ?? 0,
         lastTs: r.getLastActiveTimestamp() || 0,
         invite: r.getMyMembership() === KnownMembership.Invite,
-        bridgeBot: this.isBridgeBotRoom(r),
+        kind: this.roomKind(r),
+        favorite: FAVORITE_TAG in r.tags,
       }))
       .sort((a, b) => b.lastTs - a.lastTs);
   }
@@ -204,7 +209,7 @@ export class MatrixTransport implements Transport {
 
   /** Open a DM with the bridge bot (the room where you log in to Messenger). */
   async openBridge(): Promise<string> {
-    const existing = this.rooms().find((r) => r.bridgeBot);
+    const existing = this.rooms().find((r) => r.kind === "bridge");
     if (existing) return existing.id;
     const server = this.selfId.slice(this.selfId.indexOf(":") + 1);
     const res = await this.client.createRoom({
@@ -217,10 +222,24 @@ export class MatrixTransport implements Transport {
     return res.room_id;
   }
 
-  private isBridgeBotRoom(room: MRoom) {
+  async setFavorite(roomId: string, favorite: boolean) {
+    if (favorite) await this.client.setRoomTag(roomId, FAVORITE_TAG, { order: 0.5 });
+    else await this.client.deleteRoomTag(roomId, FAVORITE_TAG);
+  }
+
+  /**
+   * Bridge portals hold you, the bridge bot and the Messenger people ("ghosts"),
+   * so a chat with one other person besides you and the bot is a one-to-one chat.
+   */
+  private roomKind(room: MRoom): RoomKind {
     const bot = `@${this.session.bridgeBot}:`;
     const members = room.getMembers().filter((m) => m.membership === "join" || m.membership === "invite");
-    return members.length <= 2 && members.some((m) => m.userId.startsWith(bot));
+    const others = members.filter((m) => m.userId !== this.selfId && !m.userId.startsWith(bot));
+    const hasBot = members.some((m) => m.userId.startsWith(bot));
+    if (hasBot && others.length === 0) return "bridge";
+    const mine = room.getMember(this.selfId)?.events.member;
+    const isDirect = mine?.getContent().is_direct || mine?.getPrevContent().is_direct;
+    return isDirect || others.length <= 1 ? "dm" : "group";
   }
 
   private convert(ev: MatrixEvent): Message | null {

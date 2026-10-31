@@ -1,7 +1,9 @@
 import { THEMES, type Theme } from "./settings";
+import { groupRooms } from "./rooms";
 import type { Room } from "./transport/types";
 
 export interface CommandContext {
+  /** In sidebar order, so numbers match the sidebar. */
   rooms: Room[];
   activeRoom: Room | null;
   selfId: string;
@@ -17,6 +19,7 @@ export interface CommandContext {
   loadOlder(): void;
   accept(roomId: string): void;
   openBridge(): void;
+  setFavorite(roomId: string, favorite: boolean): void;
   logout(): void;
   reboot(): void;
 }
@@ -52,12 +55,14 @@ const COMMANDS: Record<string, Command> = {
     aliases: ["ls"],
     run: (_a, ctx) => {
       if (!ctx.rooms.length) return ctx.print("no channels. is the bridge logged in? try /bridge");
-      ctx.rooms.forEach((r, i) => {
-        const flags = [r.unread ? `${r.unread} new` : "", r.invite ? "invite" : "", r.bridgeBot ? "bridge" : ""]
-          .filter(Boolean)
-          .join(", ");
-        ctx.print(`  [${String(i + 1).padStart(2)}] ${r.name}${flags ? `  (${flags})` : ""}`);
-      });
+      let n = 0;
+      for (const section of groupRooms(ctx.rooms)) {
+        ctx.print(`// ${section.label}`);
+        for (const r of section.rooms) {
+          const flags = [r.unread ? `${r.unread} new` : "", r.invite ? "invite" : ""].filter(Boolean).join(", ");
+          ctx.print(`  [${String(++n).padStart(2)}] ${r.name}${flags ? `  (${flags})` : ""}`);
+        }
+      }
     },
   },
   go: {
@@ -87,6 +92,17 @@ const COMMANDS: Record<string, Command> = {
     },
   },
   older: { usage: "/older", help: "pull older history", run: (_a, ctx) => ctx.loadOlder() },
+  fav: {
+    usage: "/fav",
+    help: "add or remove current channel from favorites",
+    aliases: ["star"],
+    run: (_a, ctx) => {
+      if (!ctx.activeRoom) return ctx.print("no channel selected");
+      const favorite = !ctx.activeRoom.favorite;
+      ctx.setFavorite(ctx.activeRoom.id, favorite);
+      ctx.print(favorite ? "★ added to favorites" : "☆ removed from favorites");
+    },
+  },
   bridge: {
     usage: "/bridge",
     help: "open the Messenger bridge bot",

@@ -8,6 +8,7 @@ const SELF = "@you:deck.local";
 interface Contact {
   id: string;
   name: string;
+  kind: "dm" | "group";
   replies: string[];
 }
 
@@ -15,6 +16,7 @@ const CONTACTS: Contact[] = [
   {
     id: "!vex",
     name: "Vex // fixer",
+    kind: "dm",
     replies: [
       "Got a job if you want it. Pays in clean creds.",
       "Meet at the noodle stand under the overpass. 0200.",
@@ -25,6 +27,7 @@ const CONTACTS: Contact[] = [
   {
     id: "!nyx",
     name: "Nyx",
+    kind: "dm",
     replies: [
       "lol you're still up?",
       "the rain hasn't stopped in like 3 days",
@@ -34,7 +37,8 @@ const CONTACTS: Contact[] = [
   },
   {
     id: "!crew",
-    name: "Night Shift [group]",
+    name: "Night Shift",
+    kind: "group",
     replies: [
       "[Kade] who took the last energy drink",
       "[Rho] deploy is green, going dark for a bit",
@@ -45,6 +49,7 @@ const CONTACTS: Contact[] = [
   {
     id: "!mom",
     name: "Mom",
+    kind: "dm",
     replies: ["Call me when you get a chance ❤️", "Are you wearing a jacket? It's cold out.", "Ok sweetie"],
   },
 ];
@@ -80,7 +85,14 @@ export class DemoTransport implements Transport {
 
   constructor() {
     const now = Date.now();
-    this.roomList = CONTACTS.map((c) => ({ id: c.id, name: c.name, unread: 0, lastTs: 0 }));
+    this.roomList = CONTACTS.map((c) => ({
+      id: c.id,
+      name: c.name,
+      unread: 0,
+      lastTs: 0,
+      kind: c.kind,
+      favorite: c.id === "!nyx",
+    }));
     for (const c of CONTACTS) {
       const msgs = (SEED[c.id] ?? []).map(([sender, body, mins]) =>
         this.make(c.id, sender, body, now - mins * 60_000),
@@ -141,6 +153,12 @@ export class DemoTransport implements Transport {
   }
 
   async acceptInvite() {}
+
+  async setFavorite(roomId: string, favorite: boolean) {
+    const room = this.room(roomId);
+    if (room) room.favorite = favorite;
+    this.em.emit({ type: "rooms" });
+  }
 
   async fetchMedia(url: string) {
     return url;

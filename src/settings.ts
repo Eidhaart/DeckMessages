@@ -1,3 +1,4 @@
+import type { SectionId } from "./rooms";
 import type { MatrixSession } from "./transport/matrix";
 
 export const THEMES = ["neon", "amber", "toxic", "ice"] as const;
@@ -8,12 +9,14 @@ export interface Settings {
   /** CRT scanlines, flicker and glow. */
   fx: boolean;
   boot: boolean;
+  /** Sidebar sections the user folded away. */
+  collapsed: SectionId[];
 }
 
 const SETTINGS_KEY = "deck.settings";
 const SESSION_KEY = "deck.session";
 
-const DEFAULTS: Settings = { theme: "neon", fx: true, boot: true };
+const DEFAULTS: Settings = { theme: "neon", fx: true, boot: true, collapsed: [] };
 
 function read<T>(key: string): T | null {
   try {
