@@ -10,14 +10,17 @@ interface Props {
   /** Mask the input and keep it out of history (a password or PIN was asked for). */
   secret?: boolean;
   onSubmit(text: string): void;
+  /** Picked an image or video to send; the attach button is hidden without this. */
+  onAttach?(file: File): void;
 }
 
 export const Prompt = forwardRef<HTMLTextAreaElement, Props>(function Prompt(
-  { channel, rooms, literal, secret, onSubmit },
+  { channel, rooms, literal, secret, onSubmit, onAttach },
   ref,
 ) {
   const [value, setValue] = useState("");
   const history = useRef<string[]>([]);
+  const picker = useRef<HTMLInputElement>(null);
   const cursor = useRef(-1);
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -55,6 +58,24 @@ export const Prompt = forwardRef<HTMLTextAreaElement, Props>(function Prompt(
         <span className="accent2">deck</span>@<span className="accent">{channel}</span>
         <span className="dim">:~$</span>
       </span>
+      {onAttach && (
+        <>
+          <button className="attach" aria-label="send image or video" title="send image or video" onClick={() => picker.current?.click()}>
+            +
+          </button>
+          <input
+            ref={picker}
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              for (const file of e.target.files ?? []) onAttach(file);
+              e.target.value = "";
+            }}
+          />
+        </>
+      )}
       <textarea
         ref={ref}
         rows={1}

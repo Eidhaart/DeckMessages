@@ -2,7 +2,10 @@
 // The UI only talks to this interface, so the demo backend and the Matrix
 // (Messenger bridge) backend are interchangeable.
 
-export type MessageKind = "text" | "emote" | "notice" | "image" | "file" | "encrypted" | "system";
+export type MessageKind = "text" | "emote" | "notice" | "image" | "video" | "file" | "encrypted" | "system";
+
+/** Delivery state of your own messages: sending → sent → read (or failed). */
+export type MessageStatus = "sending" | "sent" | "read" | "failed";
 
 export interface Message {
   id: string;
@@ -13,12 +16,17 @@ export interface Message {
   ts: number;
   self: boolean;
   kind: MessageKind;
-  /** Media URL for image/file messages (may need auth, see Transport.fetchMedia). */
+  /** Media URL for image/video/file messages (may need auth, see Transport.fetchMedia). */
   mediaUrl?: string;
+  /** Only set on your own messages. */
+  status?: MessageStatus;
 }
 
-/** dm: one-to-one chat, group: group chat, bridge: the Messenger bridge bot's management room. */
-export type RoomKind = "dm" | "group" | "bridge";
+/**
+ * dm: one-to-one chat, group: group chat, request: a Messenger message request,
+ * bridge: the Messenger bridge bot's management room.
+ */
+export type RoomKind = "dm" | "group" | "request" | "bridge";
 
 export interface Room {
   id: string;
@@ -29,6 +37,19 @@ export interface Room {
   favorite: boolean;
   /** Pending invite that hasn't been accepted yet. */
   invite?: boolean;
+  /** Room picture, or the other person's picture in a one-to-one chat. */
+  avatarUrl?: string;
+  /** The other person in a one-to-one chat (a Contact id). */
+  peer?: string;
+}
+
+/** Someone you can message: everyone you share a chat with. */
+export interface Contact {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  /** Existing one-to-one chat with them, if there is one. */
+  roomId?: string;
 }
 
 export type LinkStatus = "connecting" | "online" | "offline" | "error";
@@ -46,14 +67,21 @@ export interface Transport {
   rooms(): Room[];
   messages(roomId: string): Message[];
   send(roomId: string, body: string, emote?: boolean): Promise<void>;
+  /** Send an image or video (anything else goes as a file). */
+  sendFile(roomId: string, file: File): Promise<void>;
   markRead(roomId: string): void;
   loadOlder(roomId: string): Promise<void>;
   acceptInvite(roomId: string): Promise<void>;
   setFavorite(roomId: string, favorite: boolean): Promise<void>;
+  /** Change the name shown next to your own messages. */
+  setDisplayName(name: string): Promise<void>;
+  contacts(): Contact[];
+  /** Open the one-to-one chat with a contact, starting one if needed; returns its room id. */
+  startChat(contactId: string): Promise<string>;
   /** Open (creating if needed) the chat with the Messenger bridge bot; returns its room id. */
   openBridge?(): Promise<string>;
-  /** Resolve a media URL into something an <img> can display. */
-  fetchMedia(url: string): Promise<string>;
+  /** Resolve a media URL into something an <img> can display; `size` asks for a square thumbnail. */
+  fetchMedia(url: string, size?: number): Promise<string>;
   on(listener: (e: TransportEvent) => void): () => void;
 }
 

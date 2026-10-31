@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Avatar } from "./components/Avatar";
 import { BootSequence } from "./components/BootSequence";
 import { LoginScreen } from "./components/LoginScreen";
 import { Log } from "./components/Log";
 import { Prompt } from "./components/Prompt";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, type SidebarView } from "./components/Sidebar";
 import { runCommand, type CommandContext } from "./commands";
 import { groupRooms, type SectionId } from "./rooms";
 import { loadSession, loadSettings, saveSession, saveSettings, type Settings } from "./settings";
 import { DemoTransport } from "./transport/demo";
 import { MatrixTransport, type MatrixSession } from "./transport/matrix";
-import type { LinkStatus, Message, Transport } from "./transport/types";
+import type { Contact, LinkStatus, Message, Transport } from "./transport/types";
 
 type Phase = "boot" | "login" | "deck";
 
@@ -39,6 +40,7 @@ export default function App() {
   const [sysLines, setSysLines] = useState<Message[]>([]);
   const [clearedAt, setClearedAt] = useState<Record<string, number>>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [view, setView] = useState<SidebarView>("chats");
   const [clock, setClock] = useState(() => new Date());
   const [, setTick] = useState(0);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -107,6 +109,20 @@ export default function App() {
 
   const print = (text: string) => setSysLines((l) => [...l, sysLine(activeId ?? "*", text)]);
 
+  const openContact = (c: Contact) => {
+    setView("chats");
+    if (c.roomId) return select(c.roomId);
+    print(`opening a channel to ${c.name}…`);
+    transport?.startChat(c.id).then(select, (e) => print(`!! couldn't start a chat with ${c.name}: ${e?.message ?? e}`));
+  };
+
+  const attach = (file: File) => {
+    if (!activeId || !transport) return print("open a chat first, then attach");
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    print(`uploading ${file.name} (${mb} MB)…`);
+    transport.sendFile(activeId, file).catch((e) => print(`!! couldn't send ${file.name}: ${e?.message ?? e}`));
+  };
+
   const logout = async () => {
     if (transport instanceof MatrixTransport) await transport.logout().catch(() => {});
     else await transport?.stop();
@@ -139,6 +155,18 @@ export default function App() {
     setBoot: (boot) => updateSettings({ boot }),
     loadOlder: () => activeId && void transport?.loadOlder(activeId),
     accept: (id) => transport?.acceptInvite(id).then(() => print("invite accepted"), (e) => print(`!! ${e.message}`)),
+    setDisplayName: (name) => {
+      transport?.setDisplayName(name).then(
+        () => print(`you are now known as ${name}`),
+        (e) => print(`!! couldn't change name: ${e?.message ?? e}`),
+      );
+    },
+    contacts: () => transport?.contacts() ?? [],
+    openContact,
+    showContacts: () => {
+      setView("contacts");
+      setSidebarOpen(true);
+    },
     setFavorite: (id, favorite) => {
       transport?.setFavorite(id, favorite).catch((e) => print(`!! couldn't update favorites: ${e?.message ?? e}`));
     },
@@ -230,12 +258,19 @@ export default function App() {
     <div className={shellClass}>
       <header className="topbar">
         <button className="menu" aria-label="channels" onClick={() => setSidebarOpen((o) => !o)}>
-          ≡{totalUnread > 0 && <span className="badge">{totalUnread}</span>}
+          ≡{totalUnread > 0 && <span className="dot" title={`${totalUnread} unread`} />}
         </button>
         <span className="brand glitch" data-text="DECK//MSG">
           DECK//MSG
         </span>
-        <span className="channel">{activeRoom ? `# ${activeRoom.name}` : "# —"}</span>
+        <span className="channel">
+          {activeRoom && activeRoom.kind !== "bridge" ? (
+            <Avatar url={activeRoom.avatarUrl} name={activeRoom.name} transport={transport} size={28} />
+          ) : (
+            <span className="dim">#</span>
+          )}
+          <span className="title">{activeRoom?.name ?? "—"}</span>
+        </span>
         <span className={`link ${status.status}`}>
           ● {status.status.toUpperCase()}
           {status.detail ? <span className="dim"> {status.detail}</span> : null}
@@ -245,16 +280,21 @@ export default function App() {
 
       <div className="deck-body">
         <Sidebar
+          view={view}
+          contacts={view === "contacts" ? transport.contacts() : []}
+          transport={transport}
+          onView={setView}
+          onPickContact={openContact}
           sections={sections}
-          collapsed={settings.collapsed}
+          collapsed={settings.folded}
           activeId={activeId}
           open={sidebarOpen}
           onSelect={select}
           onToggleSection={(id: SectionId) =>
             updateSettings({
-              collapsed: settings.collapsed.includes(id)
-                ? settings.collapsed.filter((c) => c !== id)
-                : [...settings.collapsed, id],
+              folded: settings.folded.includes(id)
+                ? settings.folded.filter((c) => c !== id)
+                : [...settings.folded, id],
             })
           }
           onToggleFavorite={(id, favorite) => ctx.setFavorite(id, favorite)}
@@ -283,6 +323,7 @@ export default function App() {
             literal={activeRoom?.kind === "bridge"}
             secret={asksForSecret}
             onSubmit={submit}
+            onAttach={activeRoom && activeRoom.kind !== "bridge" ? attach : undefined}
           />
         </main>
       </div>

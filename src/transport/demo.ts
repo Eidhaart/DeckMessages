@@ -1,18 +1,18 @@
-import { Emitter, type Message, type Room, type Transport } from "./types";
+import { Emitter, type Contact, type Message, type Room, type Transport } from "./types";
 
 // Offline backend with fictional contacts, so the UI can be explored and
 // styled without a homeserver or Messenger account.
 
 const SELF = "@you:deck.local";
 
-interface Contact {
+interface Persona {
   id: string;
   name: string;
-  kind: "dm" | "group";
+  kind: "dm" | "group" | "request";
   replies: string[];
 }
 
-const CONTACTS: Contact[] = [
+const CONTACTS: Persona[] = [
   {
     id: "!vex",
     name: "Vex // fixer",
@@ -52,6 +52,12 @@ const CONTACTS: Contact[] = [
     kind: "dm",
     replies: ["Call me when you get a chance ❤️", "Are you wearing a jacket? It's cold out.", "Ok sweetie"],
   },
+  {
+    id: "!ash",
+    name: "Ash Kuroda",
+    kind: "request",
+    replies: ["cool, how much?", "can you ship to the east district?"],
+  },
 ];
 
 const SEED: Record<string, [string, string, number][]> = {
@@ -71,7 +77,14 @@ const SEED: Record<string, [string, string, number][]> = {
     ["!crew", "[Kade] skipping, my cyberdeck is rebooting", 598],
   ],
   "!mom": [["!mom", "Did you get home safe?", 1440]],
+  "!ash": [["!ash", "hey, saw your post about the synth. still selling?", 300]],
 };
+
+/** People you only know from the group chat: they show up in contacts without a chat yet. */
+const GROUP_PEOPLE = [
+  { id: "@kade", name: "Kade" },
+  { id: "@rho", name: "Rho" },
+];
 
 export class DemoTransport implements Transport {
   readonly kind = "demo" as const;
@@ -82,6 +95,7 @@ export class DemoTransport implements Transport {
   private replyIdx = new Map<string, number>();
   private timers: number[] = [];
   private seq = 0;
+  private selfName = "you";
 
   constructor() {
     const now = Date.now();
@@ -92,11 +106,13 @@ export class DemoTransport implements Transport {
       lastTs: 0,
       kind: c.kind,
       favorite: c.id === "!nyx",
+      peer: c.kind === "group" ? undefined : c.id,
     }));
     for (const c of CONTACTS) {
       const msgs = (SEED[c.id] ?? []).map(([sender, body, mins]) =>
         this.make(c.id, sender, body, now - mins * 60_000),
       );
+      for (const m of msgs) if (m.self) m.status = "read";
       this.logs.set(c.id, msgs);
       const room = this.room(c.id)!;
       room.lastTs = msgs.at(-1)?.ts ?? 0;
@@ -129,10 +145,56 @@ export class DemoTransport implements Transport {
   }
 
   async send(roomId: string, body: string, emote = false) {
-    const msg = this.make(roomId, SELF, body, Date.now(), emote ? "emote" : "text");
+    this.sendOwn(this.make(roomId, SELF, body, Date.now(), emote ? "emote" : "text"));
+  }
+
+  async sendFile(roomId: string, file: File) {
+    const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
+    const msg = this.make(roomId, SELF, file.name, Date.now(), kind);
+    msg.mediaUrl = URL.createObjectURL(file);
+    this.sendOwn(msg);
+  }
+
+  contacts(): Contact[] {
+    const dms = this.roomList.filter((r) => r.peer);
+    const people: Contact[] = [
+      ...dms.map((r) => ({ id: r.peer!, name: r.name, roomId: r.id })),
+      ...GROUP_PEOPLE.filter((p) => !dms.some((r) => r.peer === p.id)),
+    ];
+    return people.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async startChat(contactId: string) {
+    const existing = this.roomList.find((r) => r.peer === contactId);
+    if (existing) return existing.id;
+    const person = GROUP_PEOPLE.find((p) => p.id === contactId);
+    const room: Room = {
+      id: `!dm-${contactId.slice(1)}`,
+      name: person?.name ?? contactId,
+      unread: 0,
+      lastTs: Date.now(),
+      kind: "dm",
+      favorite: false,
+      peer: contactId,
+    };
+    this.roomList.push(room);
+    this.logs.set(room.id, []);
+    this.em.emit({ type: "rooms" });
+    return room.id;
+  }
+
+  /** Your message goes sending → sent, and is marked read when the other side answers. */
+  private sendOwn(msg: Message) {
+    msg.status = "sending";
     this.push(msg);
+    this.timers.push(
+      window.setTimeout(() => {
+        msg.status = "sent";
+        this.em.emit({ type: "rooms" });
+      }, 500),
+    );
     const delay = 1200 + Math.random() * 2500;
-    this.timers.push(window.setTimeout(() => this.incoming(roomId), delay));
+    this.timers.push(window.setTimeout(() => this.incoming(msg.roomId), delay));
   }
 
   markRead(roomId: string) {
@@ -154,6 +216,12 @@ export class DemoTransport implements Transport {
 
   async acceptInvite() {}
 
+  async setDisplayName(name: string) {
+    this.selfName = name;
+    for (const log of this.logs.values()) for (const m of log) if (m.self) m.senderName = name;
+    this.em.emit({ type: "rooms" });
+  }
+
   async setFavorite(roomId: string, favorite: boolean) {
     const room = this.room(roomId);
     if (room) room.favorite = favorite;
@@ -164,6 +232,7 @@ export class DemoTransport implements Transport {
     return url;
   }
 
+
   private incoming(roomId: string) {
     const contact = CONTACTS.find((c) => c.id === roomId);
     if (!contact) return;
@@ -171,6 +240,7 @@ export class DemoTransport implements Transport {
     this.replyIdx.set(roomId, i + 1);
     const room = this.room(roomId)!;
     room.unread += 1;
+    for (const m of this.logs.get(roomId) ?? []) if (m.self) m.status = "read";
     this.push(this.make(roomId, roomId, contact.replies[i % contact.replies.length], Date.now()));
   }
 
@@ -193,7 +263,7 @@ export class DemoTransport implements Transport {
       id: `demo-${++this.seq}`,
       roomId,
       sender,
-      senderName: self ? "you" : (contact?.name.split(" ")[0] ?? sender),
+      senderName: self ? this.selfName : (contact?.name.split(" ")[0] ?? sender),
       body,
       ts,
       self,

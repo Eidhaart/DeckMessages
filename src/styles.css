@@ -324,3 +324,109 @@ code { color: var(--accent2); }
 }
 .prompt textarea.secret { -webkit-text-security: disc; caret-color: var(--warn); }
 .prompt textarea.secret::placeholder { color: var(--warn); opacity: 0.7; }
+
+/* ---------- avatars ---------- */
+.avatar {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-indent: 0;
+  color: var(--accent);
+  background: color-mix(in srgb, currentColor 14%, var(--bg));
+  border: 1px solid color-mix(in srgb, currentColor 55%, transparent);
+  /* clipped corner, like the login panel */
+  clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+}
+.avatar.n0 { color: var(--n0); } .avatar.n1 { color: var(--n1); } .avatar.n2 { color: var(--n2); }
+.avatar.n3 { color: var(--n3); } .avatar.n4 { color: var(--n4); } .avatar.n5 { color: var(--n5); }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar.sys { width: 26px; height: 26px; color: var(--accent2); font-size: 13px; }
+
+/* ---------- sidebar tabs ---------- */
+.tabs { display: flex; gap: 0; margin: 0 12px 6px; border: 1px solid var(--line); }
+.tabs button {
+  flex: 1;
+  background: none;
+  border: 0;
+  padding: 6px 0;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+}
+.tabs button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); text-shadow: var(--glow); }
+
+/* ---------- unread: a quiet dot and a brighter name ---------- */
+.dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent2);
+  box-shadow: 0 0 6px var(--accent2);
+}
+.section-label .dot { margin-left: auto; }
+.sidebar li.unread .name { color: var(--fg); font-weight: 700; }
+.sidebar li:not(.unread) .room:not(.active) .name { color: color-mix(in srgb, var(--fg) 75%, var(--dim)); }
+.menu .dot { position: absolute; top: -3px; right: -3px; }
+
+/* ---------- contacts ---------- */
+.contacts { padding-bottom: 12px; }
+.contact-search { display: flex; align-items: center; gap: 8px; margin: 2px 12px 8px; padding: 6px 8px; border: 1px solid var(--line); background: var(--bg2); }
+.contact-search input { flex: 1; min-width: 0; background: none; border: 0; outline: none; caret-color: var(--accent); }
+.contact-search .count { font-size: 11px; }
+.contacts .letter { color: var(--accent2); font-size: 11px; letter-spacing: 0.2em; padding: 8px 14px 2px; }
+.contacts ul { list-style: none; margin: 0; padding: 0; }
+.contacts .contact {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg);
+}
+.contacts .contact:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); border-left-color: var(--accent); }
+.contacts .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contacts .go { font-size: 11px; letter-spacing: 0.05em; }
+.contacts .go.open { color: var(--dim); }
+.contacts .go.new { color: var(--accent); }
+.contacts .empty { padding: 8px 14px; }
+
+/* ---------- chat header ---------- */
+.channel { display: flex; align-items: center; gap: 8px; }
+.channel .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- read status: only on your latest message ---------- */
+.mark { margin-left: 1ch; font-size: 11px; letter-spacing: -0.1em; white-space: nowrap; }
+.mark.sending { color: var(--dim); }
+.mark.sent { color: var(--dim); }
+.mark.read { color: var(--accent); text-shadow: var(--glow); }
+.mark.failed { color: var(--bad); font-weight: 700; }
+
+/* ---------- media ---------- */
+.media video { display: block; max-width: min(360px, 100%); max-height: 320px; margin-top: 4px; border: 1px solid var(--line); background: #000; }
+.attach {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--accent);
+  width: 28px;
+  height: 26px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.attach:hover { border-color: var(--accent); box-shadow: var(--glow); }
+@media (max-width: 760px) {
+  .attach { width: 34px; height: 32px; }
+  .tabs button { padding: 9px 0; font-size: 12px; }
+  .contacts .contact { padding: 9px 14px; }
+}

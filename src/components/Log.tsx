@@ -14,9 +14,10 @@ function nickClass(sender: string) {
 function Media({ msg, transport }: { msg: Message; transport: Transport }) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const playable = msg.kind === "image" || msg.kind === "video";
 
   useEffect(() => {
-    if (!msg.mediaUrl || msg.kind !== "image") return;
+    if (!msg.mediaUrl || !playable) return;
     let live = true;
     transport.fetchMedia(msg.mediaUrl).then(
       (u) => live && setSrc(u),
@@ -25,16 +26,24 @@ function Media({ msg, transport }: { msg: Message; transport: Transport }) {
     return () => {
       live = false;
     };
-  }, [msg.mediaUrl, msg.kind, transport]);
+  }, [msg.mediaUrl, playable, transport]);
 
-  if (msg.kind === "file" || failed || !msg.mediaUrl) return <span className="tag">[FILE] {msg.body}</span>;
+  if (!playable || failed || !msg.mediaUrl) return <span className="tag">[FILE] {msg.body}</span>;
   return (
     <span className="media">
-      <span className="tag">[IMG] {msg.body}</span>
-      {src && <img src={src} alt={msg.body} loading="lazy" />}
+      <span className="tag">{msg.kind === "video" ? "[VID]" : "[IMG]"} {msg.body}</span>
+      {src && msg.kind === "image" && <img src={src} alt={msg.body} loading="lazy" />}
+      {src && msg.kind === "video" && <video src={src} controls preload="metadata" playsInline />}
     </span>
   );
 }
+
+const MARKS: Record<NonNullable<Message["status"]>, [string, string]> = {
+  sending: ["·", "sending"],
+  sent: ["✓", "sent"],
+  read: ["✓✓", "seen"],
+  failed: ["!", "not sent"],
+};
 
 interface Props {
   messages: Message[];
@@ -75,6 +84,9 @@ export function Log({ messages, transport, roomKey, onTop }: Props) {
     if (el.scrollTop === 0) onTop();
   }
 
+  // Like Messenger: only your latest message shows sent/seen, plus any that failed.
+  const lastOwn = messages.findLast((m) => m.self && m.status)?.id;
+
   let lastDay = "";
   return (
     <div className="log" ref={ref} onScroll={onScroll}>
@@ -84,7 +96,7 @@ export function Log({ messages, transport, roomKey, onTop }: Props) {
         return (
           <div key={m.id}>
             {divider && <div className="day">── {divider} ──</div>}
-            <Line msg={m} transport={transport} />
+            <Line msg={m} transport={transport} showStatus={m.id === lastOwn || m.status === "failed"} />
           </div>
         );
       })}
@@ -92,7 +104,7 @@ export function Log({ messages, transport, roomKey, onTop }: Props) {
   );
 }
 
-function Line({ msg: m, transport }: { msg: Message; transport: Transport }) {
+function Line({ msg: m, transport, showStatus }: { msg: Message; transport: Transport; showStatus: boolean }) {
   if (m.kind === "system") {
     return (
       <div className="line system">
@@ -102,18 +114,26 @@ function Line({ msg: m, transport }: { msg: Message; transport: Transport }) {
     );
   }
   const who = m.self ? "nick self" : nickClass(m.sender);
+  const mark = showStatus && m.status ? MARKS[m.status] : null;
+  const status = mark && (
+    <span className={`mark ${m.status}`} title={mark[1]}>
+      {mark[0]}
+    </span>
+  );
   return (
     <div className={`line ${m.kind}${m.self ? " mine" : ""}`}>
       <span className="ts">{time(m.ts)}</span>
       {m.kind === "emote" ? (
         <span className="body">
           * <span className={who}>{m.senderName}</span> {m.body}
+          {status}
         </span>
       ) : (
         <>
           <span className={who}>&lt;{m.senderName}&gt;</span>
           <span className="body">
-            {m.kind === "image" || m.kind === "file" ? <Media msg={m} transport={transport} /> : m.body}
+            {m.kind === "image" || m.kind === "video" || m.kind === "file" ? <Media msg={m} transport={transport} /> : m.body}
+            {status}
           </span>
         </>
       )}

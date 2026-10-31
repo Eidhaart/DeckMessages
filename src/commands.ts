@@ -1,6 +1,6 @@
 import { THEMES, type Theme } from "./settings";
 import { groupRooms } from "./rooms";
-import type { Room } from "./transport/types";
+import type { Contact, Room } from "./transport/types";
 
 export interface CommandContext {
   /** In sidebar order, so numbers match the sidebar. */
@@ -20,6 +20,10 @@ export interface CommandContext {
   accept(roomId: string): void;
   openBridge(): void;
   setFavorite(roomId: string, favorite: boolean): void;
+  setDisplayName(name: string): void;
+  contacts(): Contact[];
+  openContact(contact: Contact): void;
+  showContacts(): void;
   logout(): void;
   reboot(): void;
 }
@@ -138,6 +142,31 @@ const COMMANDS: Record<string, Command> = {
       ctx.setBoot(a === "on");
       ctx.print(`boot sequence ${a}`);
     },
+  },
+  contacts: {
+    usage: "/contacts",
+    help: "show your contact list",
+    aliases: ["c"],
+    run: (_a, ctx) => ctx.showContacts(),
+  },
+  msg: {
+    usage: "/msg <name>",
+    help: "open a chat with a contact",
+    aliases: ["dm"],
+    run: (a, ctx) => {
+      if (!a) return ctx.print("usage: /msg <name>");
+      const q = a.toLowerCase();
+      const all = ctx.contacts();
+      const hit = all.find((c) => c.name.toLowerCase() === q) ?? all.find((c) => c.name.toLowerCase().includes(q));
+      if (!hit) return ctx.print(`no contact matches "${a}". try /contacts`);
+      ctx.openContact(hit);
+    },
+  },
+  nick: {
+    usage: "/nick <name>",
+    help: "change the name shown on your messages",
+    aliases: ["name"],
+    run: (a, ctx) => (a ? ctx.setDisplayName(a) : ctx.print("usage: /nick <name>")),
   },
   whoami: {
     usage: "/whoami",

@@ -1,6 +1,6 @@
 import type { Room } from "./transport/types";
 
-export type SectionId = "favorites" | "dm" | "group" | "bridge";
+export type SectionId = "favorites" | "dm" | "bridge" | "group" | "request";
 
 export interface Section {
   id: SectionId;
@@ -12,12 +12,14 @@ const LABELS: Record<SectionId, string> = {
   favorites: "FAVORITES",
   dm: "DIRECT",
   group: "GROUPS",
+  request: "REQUESTS",
   bridge: "SYSTEM",
 };
 
 /**
- * Splits rooms into sidebar sections. Favorites are pulled out of their usual section,
- * and each section is ordered by latest activity. Empty sections are dropped.
+ * Splits rooms into sidebar sections: people first, groups and message requests last.
+ * Favorites are pulled out of their usual section, and each section is ordered by latest
+ * activity. Empty sections are dropped.
  */
 export function groupRooms(rooms: Room[]): Section[] {
   const byRecent = [...rooms].sort((a, b) => b.lastTs - a.lastTs);
@@ -29,8 +31,9 @@ export function groupRooms(rooms: Room[]): Section[] {
   return [
     pick("favorites", (r) => r.favorite),
     pick("dm", (r) => !r.favorite && r.kind === "dm"),
-    pick("group", (r) => !r.favorite && r.kind === "group"),
     pick("bridge", (r) => !r.favorite && r.kind === "bridge"),
+    pick("group", (r) => !r.favorite && r.kind === "group"),
+    pick("request", (r) => !r.favorite && r.kind === "request"),
   ].filter((s) => s.rooms.length > 0);
 }
 

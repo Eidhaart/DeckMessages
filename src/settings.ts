@@ -9,14 +9,14 @@ export interface Settings {
   /** CRT scanlines, flicker and glow. */
   fx: boolean;
   boot: boolean;
-  /** Sidebar sections the user folded away. */
-  collapsed: SectionId[];
+  /** Sidebar sections that are folded shut. (Renamed from `collapsed` so the new defaults apply.) */
+  folded: SectionId[];
 }
 
 const SETTINGS_KEY = "deck.settings";
 const SESSION_KEY = "deck.session";
 
-const DEFAULTS: Settings = { theme: "neon", fx: true, boot: true, collapsed: [] };
+const DEFAULTS: Settings = { theme: "neon", fx: true, boot: true, folded: ["group", "request"] };
 
 function read<T>(key: string): T | null {
   try {
