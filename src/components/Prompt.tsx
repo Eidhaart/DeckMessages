@@ -5,10 +5,17 @@ import type { Room } from "../transport/types";
 interface Props {
   channel: string;
   rooms: Room[];
+  /** Send exactly what was typed: no auto-capitalize or autocorrect (for bot commands and logins). */
+  literal?: boolean;
+  /** Mask the input and keep it out of history (a password or PIN was asked for). */
+  secret?: boolean;
   onSubmit(text: string): void;
 }
 
-export const Prompt = forwardRef<HTMLTextAreaElement, Props>(function Prompt({ channel, rooms, onSubmit }, ref) {
+export const Prompt = forwardRef<HTMLTextAreaElement, Props>(function Prompt(
+  { channel, rooms, literal, secret, onSubmit },
+  ref,
+) {
   const [value, setValue] = useState("");
   const history = useRef<string[]>([]);
   const cursor = useRef(-1);
@@ -18,7 +25,7 @@ export const Prompt = forwardRef<HTMLTextAreaElement, Props>(function Prompt({ c
       e.preventDefault();
       const text = value.trim();
       if (!text) return;
-      history.current.unshift(text);
+      if (!secret) history.current.unshift(text);
       cursor.current = -1;
       setValue("");
       onSubmit(text);
@@ -54,8 +61,11 @@ export const Prompt = forwardRef<HTMLTextAreaElement, Props>(function Prompt({ c
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="type a message or /help"
-        autoCapitalize="sentences"
+        className={secret ? "secret" : undefined}
+        placeholder={secret ? "hidden input — typed exactly as entered" : "type a message or /help"}
+        autoCapitalize={literal || secret ? "off" : "sentences"}
+        autoCorrect={literal || secret ? "off" : "on"}
+        autoComplete="off"
         spellCheck={false}
         enterKeyHint="send"
       />
@@ -65,7 +75,7 @@ export const Prompt = forwardRef<HTMLTextAreaElement, Props>(function Prompt({ c
         onClick={() => {
           const text = value.trim();
           if (text) {
-            history.current.unshift(text);
+            if (!secret) history.current.unshift(text);
             setValue("");
             onSubmit(text);
           }

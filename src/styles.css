@@ -322,3 +322,5 @@ code { color: var(--accent2); }
 @media (max-width: 760px) and (max-height: 560px) {
   .statusbar { display: none; }
 }
+.prompt textarea.secret { -webkit-text-security: disc; caret-color: var(--warn); }
+.prompt textarea.secret::placeholder { color: var(--warn); opacity: 0.7; }

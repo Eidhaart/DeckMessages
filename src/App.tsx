@@ -219,6 +219,11 @@ export default function App() {
     );
   }
 
+  // The bridge bot's last message asks for a password or PIN: hide what's typed next.
+  const lastLine = messages.findLast((m) => m.kind !== "system");
+  const asksForSecret =
+    activeRoom?.kind === "bridge" && !!lastLine && !lastLine.self && /password|\bpin\b/i.test(lastLine.body);
+
   const totalUnread = rooms.reduce((n, r) => n + (r.id === activeId ? 0 : r.unread), 0);
 
   return (
@@ -271,7 +276,14 @@ export default function App() {
             roomKey={activeId}
             onTop={() => activeId && void transport.loadOlder(activeId)}
           />
-          <Prompt ref={promptRef} channel={activeRoom?.name.split(/\s/)[0].toLowerCase() ?? "void"} rooms={rooms} onSubmit={submit} />
+          <Prompt
+            ref={promptRef}
+            channel={activeRoom?.name.split(/\s/)[0].toLowerCase() ?? "void"}
+            rooms={rooms}
+            literal={activeRoom?.kind === "bridge"}
+            secret={asksForSecret}
+            onSubmit={submit}
+          />
         </main>
       </div>
 
