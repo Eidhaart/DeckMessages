@@ -12,6 +12,12 @@
 
 set -euo pipefail
 
+# Everything runs inside main(), so bash has read the whole script before running any of it.
+# With `curl ... | bash`, a command that reads stdin (like `docker compose run`) would
+# otherwise swallow the rest of the script and the install would silently stop.
+main() {
+
+local DIR DOMAIN MXUSER
 DIR=/opt/deckmessages
 DOMAIN="${DECK_DOMAIN:-}"
 MXUSER="${DECK_USER:-deck}"
@@ -68,13 +74,11 @@ fi
 
 # ---------------------------------------------------------------- settings
 mkdir -p "$DIR" && cd "$DIR"
-FIRST_RUN=0
 if [[ -f .env ]]; then
   # shellcheck disable=SC1091
   source .env
   step "Existing install found for ${DOMAIN}, updating"
 else
-  FIRST_RUN=1
   if [[ -z "$DOMAIN" ]]; then
     ip=$(curl -fsS4 --max-time 10 https://api.ipify.org || curl -fsS4 --max-time 10 https://ifconfig.me) \
       || die "couldn't detect the public IP; pass --domain"
@@ -220,10 +224,11 @@ for i in $(seq 1 90); do
 done
 compose restart mautrix-meta >/dev/null
 
-if (( FIRST_RUN )); then
+# Create the account unless it exists (an earlier run may have stopped before this point).
+if ! curl -fsS "http://127.0.0.1:8008/_matrix/client/v3/profile/@${MXUSER}:${DOMAIN}" >/dev/null 2>&1; then
   step "Creating your account @${MXUSER}:${DOMAIN}"
   compose exec -T synapse register_new_matrix_user -c /data/homeserver.yaml \
-    -u "$MXUSER" -p "$USER_PASS" --no-admin http://localhost:8008 >/dev/null
+    -u "$MXUSER" -p "$USER_PASS" --no-admin http://localhost:8008 </dev/null >/dev/null
 fi
 
 step "Waiting for HTTPS certificate"
@@ -255,3 +260,6 @@ if (( ! https_ok )); then
   echo "  !! https://${DOMAIN} isn't reachable yet. On Oracle Cloud, allow TCP 80 and 443"
   echo "     in the VCN security list (see docs/SERVER.md), then wait a minute."
 fi
+}
+
+main "$@"
