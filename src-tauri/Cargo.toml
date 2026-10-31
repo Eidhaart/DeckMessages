@@ -1,6 +1,6 @@
 [package]
 name = "deckmessages"
-version = "0.1.6"
+version = "0.1.7"
 description = "Cyberpunk terminal client for Messenger (via Matrix bridge)"
 edition = "2021"
 

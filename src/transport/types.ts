@@ -23,10 +23,15 @@ export interface Message {
 }
 
 /**
- * dm: one-to-one chat, group: group chat, request: a Messenger message request,
+ * dm: one-to-one chat, group: group chat, market: Marketplace / Facebook group listing chats,
+ * business: pages and bots (Meta AI, companies), request: a Messenger message request,
  * bridge: the Messenger bridge bot's management room.
  */
-export type RoomKind = "dm" | "group" | "request" | "bridge";
+export type RoomKind = "dm" | "group" | "market" | "business" | "request" | "bridge";
+
+/** Kinds you can move a chat into by hand. */
+export const MOVABLE_KINDS = ["dm", "group", "market", "business", "request"] as const;
+export type MovableKind = (typeof MOVABLE_KINDS)[number];
 
 export interface Room {
   id: string;
@@ -73,6 +78,8 @@ export interface Transport {
   loadOlder(roomId: string): Promise<void>;
   acceptInvite(roomId: string): Promise<void>;
   setFavorite(roomId: string, favorite: boolean): Promise<void>;
+  /** Pin a chat to a category, or null to go back to automatic sorting. */
+  setCategory(roomId: string, kind: MovableKind | null): Promise<void>;
   /** Change the name shown next to your own messages. */
   setDisplayName(name: string): Promise<void>;
   contacts(): Contact[];

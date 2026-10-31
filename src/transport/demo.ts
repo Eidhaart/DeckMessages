@@ -1,4 +1,4 @@
-import { Emitter, type Contact, type Message, type Room, type Transport } from "./types";
+import { Emitter, type Contact, type Message, type MovableKind, type Room, type Transport } from "./types";
 
 // Offline backend with fictional contacts, so the UI can be explored and
 // styled without a homeserver or Messenger account.
@@ -8,7 +8,7 @@ const SELF = "@you:deck.local";
 interface Persona {
   id: string;
   name: string;
-  kind: "dm" | "group" | "request";
+  kind: "dm" | "group" | "market" | "business" | "request";
   replies: string[];
 }
 
@@ -58,6 +58,18 @@ const CONTACTS: Persona[] = [
     kind: "request",
     replies: ["cool, how much?", "can you ship to the east district?"],
   },
+  {
+    id: "!synth",
+    name: "Rook · Modular synth, barely used",
+    kind: "market",
+    replies: ["still available!", "I can do 400 if you pick it up"],
+  },
+  {
+    id: "!bank",
+    name: "neonbank.io",
+    kind: "business",
+    replies: ["Thanks for reaching out! An agent will reply shortly."],
+  },
 ];
 
 const SEED: Record<string, [string, string, number][]> = {
@@ -78,6 +90,8 @@ const SEED: Record<string, [string, string, number][]> = {
   ],
   "!mom": [["!mom", "Did you get home safe?", 1440]],
   "!ash": [["!ash", "hey, saw your post about the synth. still selling?", 300]],
+  "!synth": [["!synth", "Hi! Is this still available?", 900]],
+  "!bank": [["!bank", "Your card ending 4471 was used at Noodle Bar 88.", 2000]],
 };
 
 /** People you only know from the group chat: they show up in contacts without a chat yet. */
@@ -106,7 +120,7 @@ export class DemoTransport implements Transport {
       lastTs: 0,
       kind: c.kind,
       favorite: c.id === "!nyx",
-      peer: c.kind === "group" ? undefined : c.id,
+      peer: c.kind === "dm" || c.kind === "request" ? c.id : undefined,
     }));
     for (const c of CONTACTS) {
       const msgs = (SEED[c.id] ?? []).map(([sender, body, mins]) =>
@@ -219,6 +233,13 @@ export class DemoTransport implements Transport {
   async setDisplayName(name: string) {
     this.selfName = name;
     for (const log of this.logs.values()) for (const m of log) if (m.self) m.senderName = name;
+    this.em.emit({ type: "rooms" });
+  }
+
+  async setCategory(roomId: string, kind: MovableKind | null) {
+    const room = this.room(roomId);
+    const persona = CONTACTS.find((c) => c.id === roomId);
+    if (room) room.kind = kind ?? persona?.kind ?? "dm";
     this.em.emit({ type: "rooms" });
   }
 

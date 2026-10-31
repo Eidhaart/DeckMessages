@@ -167,6 +167,9 @@ export default function App() {
       setView("contacts");
       setSidebarOpen(true);
     },
+    setCategory: (id, kind) => {
+      transport?.setCategory(id, kind).catch((e) => print(`!! couldn't move chat: ${e?.message ?? e}`));
+    },
     setFavorite: (id, favorite) => {
       transport?.setFavorite(id, favorite).catch((e) => print(`!! couldn't update favorites: ${e?.message ?? e}`));
     },
@@ -286,15 +289,15 @@ export default function App() {
           onView={setView}
           onPickContact={openContact}
           sections={sections}
-          collapsed={settings.folded}
+          collapsed={settings.shut}
           activeId={activeId}
           open={sidebarOpen}
           onSelect={select}
           onToggleSection={(id: SectionId) =>
             updateSettings({
-              folded: settings.folded.includes(id)
-                ? settings.folded.filter((c) => c !== id)
-                : [...settings.folded, id],
+              shut: settings.shut.includes(id)
+                ? settings.shut.filter((c) => c !== id)
+                : [...settings.shut, id],
             })
           }
           onToggleFavorite={(id, favorite) => ctx.setFavorite(id, favorite)}

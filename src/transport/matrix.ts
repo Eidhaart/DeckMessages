@@ -14,11 +14,14 @@ import {
   type MatrixClient,
   type MatrixEvent,
   type Room as MRoom,
+  type RoomMember,
 } from "matrix-js-sdk";
 import {
   Emitter,
+  MOVABLE_KINDS,
   type Contact,
   type Message,
+  type MovableKind,
   type MessageStatus,
   type Room,
   type RoomKind,
@@ -26,6 +29,8 @@ import {
 } from "./types";
 
 const FAVORITE_TAG = "m.favourite";
+/** Room tag prefix for chats you moved to a category by hand (u.* tags are for clients). */
+const CATEGORY_TAG = "u.deck.category.";
 /** State events where bridges describe a portal room (the second is the older name). */
 const BRIDGE_STATE = ["m.bridge", "uk.half-shot.bridge"];
 
@@ -161,10 +166,12 @@ export class MatrixTransport implements Transport {
       return (m === KnownMembership.Join || m === KnownMembership.Invite) && !r.isSpaceRoom();
     });
     this.learnAccountIds(rooms);
+    const market = this.marketplaceRooms();
     return rooms
       .map((r): Room => {
-        const kind = this.roomKind(r);
-        const peer = kind === "dm" || kind === "request" ? this.people(r)[0] : undefined;
+        const kind = this.roomKind(r, market);
+        const people = this.people(r);
+        const peer = people.length === 1 && kind !== "group" ? people[0] : undefined;
         const named = r.currentState.getStateEvents(EventType.RoomName, "")?.getContent().name;
         return {
           id: r.roomId,
@@ -356,17 +363,51 @@ export class MatrixTransport implements Transport {
     }
   }
 
-  private roomKind(room: MRoom): RoomKind {
+  /** Chats the bridge files under its Marketplace space (enabled by `marketplace_space`). */
+  private marketplaceRooms() {
+    const ids = new Set<string>();
+    for (const space of this.client.getRooms()) {
+      if (!space.isSpaceRoom() || !/marketplace/i.test(space.name)) continue;
+      for (const child of space.currentState.getStateEvents("m.space.child")) {
+        if (child.getContent().via) ids.add(child.getStateKey()!);
+      }
+    }
+    return ids;
+  }
+
+  private roomKind(room: MRoom, market: Set<string>): RoomKind {
     const members = room.getMembers().filter((m) => m.membership === "join" || m.membership === "invite");
     const people = this.people(room);
     if (people.length === 0 && members.some((m) => this.isBot(m.userId))) return "bridge";
+
+    const pinned = Object.keys(room.tags).find((t) => t.startsWith(CATEGORY_TAG))?.slice(CATEGORY_TAG.length);
+    if (MOVABLE_KINDS.includes(pinned as MovableKind)) return pinned as MovableKind;
+
     const info = this.bridgeInfo(room);
     if (info.request) return "request";
+    // Marketplace and Facebook-group listing chats are titled "Person · Listing".
+    if (market.has(room.roomId) || / · /.test(room.name)) return "market";
+    if (people.length === 1 && this.isBusiness(people[0])) return "business";
     if (info.type === "dm") return "dm";
     if (info.type) return "group";
     const mine = room.getMember(this.selfId)?.events.member;
     const isDirect = mine?.getContent().is_direct || mine?.getPrevContent().is_direct;
     return isDirect || people.length <= 1 ? "dm" : "group";
+  }
+
+  /** Meta's own bots are flagged by the bridge; company pages tend to be named like a web address. */
+  private isBusiness(member: RoomMember) {
+    const profile = member.events.member?.getContent() ?? {};
+    const name = member.rawDisplayName.trim();
+    return !!profile["com.beeper.bridge.is_network_bot"] || /^meta ai$/i.test(name) || /^[\w-]+(\.[\w-]+)+$/.test(name);
+  }
+
+  async setCategory(roomId: string, kind: MovableKind | null) {
+    const room = this.client.getRoom(roomId);
+    for (const tag of Object.keys(room?.tags ?? {})) {
+      if (tag.startsWith(CATEGORY_TAG)) await this.client.deleteRoomTag(roomId, tag);
+    }
+    if (kind) await this.client.setRoomTag(roomId, CATEGORY_TAG + kind, {});
   }
 
   /** One name for you, whether you wrote from DeckMessages or the Messenger app. */

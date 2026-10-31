@@ -1,6 +1,6 @@
 import { THEMES, type Theme } from "./settings";
 import { groupRooms } from "./rooms";
-import type { Contact, Room } from "./transport/types";
+import type { Contact, MovableKind, Room } from "./transport/types";
 
 export interface CommandContext {
   /** In sidebar order, so numbers match the sidebar. */
@@ -20,6 +20,7 @@ export interface CommandContext {
   accept(roomId: string): void;
   openBridge(): void;
   setFavorite(roomId: string, favorite: boolean): void;
+  setCategory(roomId: string, kind: MovableKind | null): void;
   setDisplayName(name: string): void;
   contacts(): Contact[];
   openContact(contact: Contact): void;
@@ -93,6 +94,21 @@ const COMMANDS: Record<string, Command> = {
     run: (_a, ctx) => {
       if (!ctx.activeRoom?.invite) return ctx.print("no pending invite here");
       ctx.accept(ctx.activeRoom.id);
+    },
+  },
+  move: {
+    usage: "/move <category|auto>",
+    help: "move this chat: direct, groups, marketplace, business, requests",
+    run: (a, ctx) => {
+      if (!ctx.activeRoom || ctx.activeRoom.kind === "bridge") return ctx.print("open a chat first");
+      const names: Record<string, MovableKind | null> = {
+        direct: "dm", dm: "dm", groups: "group", group: "group", marketplace: "market", market: "market",
+        business: "business", requests: "request", request: "request", auto: null,
+      };
+      const key = a.toLowerCase();
+      if (!(key in names)) return ctx.print("usage: /move direct|groups|marketplace|business|requests|auto");
+      ctx.setCategory(ctx.activeRoom.id, names[key]);
+      ctx.print(names[key] ? `moved to ${key}` : "back to automatic sorting");
     },
   },
   older: { usage: "/older", help: "pull older history", run: (_a, ctx) => ctx.loadOlder() },
