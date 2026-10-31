@@ -39,7 +39,8 @@ code { color: var(--accent2); }
 
 .shell {
   position: relative;
-  height: 100dvh;
+  /* --app-h tracks the visible area above the on-screen keyboard (see main.tsx). */
+  height: var(--app-h, 100dvh);
   display: flex;
   flex-direction: column;
   background:
@@ -233,19 +234,21 @@ code { color: var(--accent2); }
 .log::-webkit-scrollbar { width: 8px; }
 .log::-webkit-scrollbar-thumb { background: var(--line); }
 .day { color: var(--dim); text-align: center; font-size: 11px; margin: 10px 0 4px; letter-spacing: 0.1em; }
-.line { display: flex; gap: 8px; padding: 1px 0; word-break: break-word; }
-.line .ts { color: var(--dim); flex-shrink: 0; font-size: 12px; padding-top: 1px; }
-.line .body { flex: 1; min-width: 0; white-space: pre-wrap; }
-.nick { flex-shrink: 0; font-weight: 700; }
+/* Lines flow like a terminal: wrapped text uses the full width, with a small hanging indent,
+   so long names (e.g. bridge bots) don't squeeze the message into a narrow column. */
+.line { padding: 1px 0 1px 2ch; text-indent: -2ch; overflow-wrap: anywhere; }
+.line .ts { color: var(--dim); font-size: 12px; margin-right: 1ch; }
+.line .body { white-space: pre-wrap; }
+.nick { font-weight: 700; margin-right: 1ch; }
 .nick.self { color: var(--accent2); }
 .n0 { color: var(--n0); } .n1 { color: var(--n1); } .n2 { color: var(--n2); }
 .n3 { color: var(--n3); } .n4 { color: var(--n4); } .n5 { color: var(--n5); }
-.line.system .body { color: var(--accent); white-space: pre; overflow-x: auto; }
+.line.system .body { color: var(--accent); }
 .line.notice .body { color: var(--dim); }
 .line.encrypted .body { color: var(--bad); font-style: italic; }
 .line.emote .body { font-style: italic; }
 .tag { color: var(--warn); }
-.media img { display: block; max-width: min(360px, 100%); max-height: 300px; margin-top: 4px; border: 1px solid var(--line); }
+.media img { display: block; text-indent: 0; max-width: min(360px, 100%); max-height: 300px; margin-top: 4px; border: 1px solid var(--line); }
 
 /* ---------- prompt ---------- */
 .prompt {
@@ -292,4 +295,9 @@ code { color: var(--accent2); }
   .scrim { display: block; position: absolute; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.5); }
   .ps1 .dim, .ps1 > .accent2 { display: none; }
   .sidebar li button { padding: 10px 14px; }
+}
+
+/* Keyboard open on a phone: give the chat the room instead of the status bar. */
+@media (max-width: 760px) and (max-height: 560px) {
+  .statusbar { display: none; }
 }
