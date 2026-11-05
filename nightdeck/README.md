@@ -25,6 +25,19 @@ cd nightdeck
 
 Setup uses sudo for Debian packages only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano and the w3m text browser, then tries micro. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves the login shell and startup files alone. It replaces only the Nightdeck executable. To remove the executable, delete `~/.local/bin/nightdeck`.
 
+## SSH autostart and jack out
+
+`./setup.sh` makes Nightdeck open by itself when you log in over SSH. It adds a marked block to `~/.profile`, plus `~/.bash_profile`, `~/.bash_login` or `~/.zprofile` when you have them. Rerunning setup replaces the block, and `./setup.sh --skip-packages --no-autostart` removes it. The deck only starts for interactive SSH logins. `scp`, `ssh deck@nightdeck.local <command>` and logins on the Pi's own screen are untouched.
+
+**Jack out** (**0**, **Esc** on the dashboard, or `/exit`) opens a menu:
+
+- **Power off the deck** runs `sudo systemctl poweroff`. Wait for the green activity LED to stop before you unplug the Pi.
+- **Reboot** runs `sudo systemctl reboot`.
+- **Exit to shell** leaves Nightdeck and keeps your SSH session open with a normal shell.
+- **Disconnect** leaves Nightdeck and logs out.
+
+Raspberry Pi OS lets the first user run sudo without a password, so power off works right away. If your user needs a password, sudo asks for it. If Nightdeck crashes, the autostart drops you into a shell instead of logging you out, so you can't get locked out over SSH.
+
 ## Look
 
 Nightdeck v2 has the same tools as before, with a livelier cyberdeck interface modeled on the DeckMessages terminal and the Cyberdeck Zsh banner:
@@ -38,9 +51,10 @@ Nightdeck v2 has the same tools as before, with a livelier cyberdeck interface m
 
 The dashboard borrows the split navigation, clock and command prompt from [DeckMessages](https://github.com/Eidhaart/DeckMessages). On wider terminals, numbered modules sit beside live local vitals. On smaller terminals, a one-line CPU, RAM and temperature readout sits above the scrolling module list. Modules use the full width for diffs, headlines and other text.
 
-- Press **1–9** to open a dashboard module directly and **0** to jack out (exit). Or press **/** and type a command such as `git`, `news` or `zsh`. **Tab** completes the name. Use **/help** for the command list.
+- Press **1–9** to open a dashboard module directly and **0** to jack out. Or press **/** and type a command such as `git`, `news` or `claude`. **Tab** completes the name. Use **/help** for the command list.
+- **Esc** goes back. On the dashboard, **Esc** opens the Jack out menu.
 
-- **Up/Down** or **j/k** moves. **Enter** selects. **Esc** goes back and exits from the home screen. In a text view, **Page Up/Down** scrolls by page.
+- **Up/Down** or **j/k** moves. **Enter** selects. In a text view, **Page Up/Down** scrolls by page.
 - A compact terminal around **80 columns × 24 rows** fits an 800×480 display with an appropriate font. Menus scroll at smaller sizes and adapt when resized. The app uses the terminal's character grid and does not change the Pi's display settings.
 - The default Cyberdeck palette matches the bundled Zsh theme. Colors in order: `#FF003C`, `#FFEE08`, `#00FFFF`, `#1DED83`, `#FAFAFA`, `#0E0E0E`. Curses programs these RGB values when the terminal advertises a mutable 256-color palette. Otherwise it uses available approximations, including the Linux console's basic colors. Let SSH forward your real terminal type.
 - Micro normally saves with **Ctrl+S** and exits with **Ctrl+Q**. Nano saves with **Ctrl+O**, then **Enter**, and exits with **Ctrl+X**.
@@ -61,7 +75,8 @@ The dashboard borrows the split navigation, clock and command prompt from [DeckM
 - **Zsh.** Run `./setup-oh-my-zsh.sh` from the extracted directory to enable your Cyberdeck prompt, startup banner and `jack-in` command in the Nightdeck Zsh menu. Setup reuses `~/.oh-my-zsh` or fetches a shallow copy from upstream GitHub. It writes a dedicated profile under `${XDG_CONFIG_HOME:-~/.config}/nightdeck/zsh`, so your regular Zsh configuration and login shell are preserved. The profile loads the Git plugin and disables automatic Oh My Zsh updates. The bundled Ptyxis palette is available for manual import on Ubuntu.
 - **System and SSH.** Check uptime, load, memory, disk and CPU temperature when available. Connect using a hostname or an alias in your SSH config, edit that config, or inspect loaded agent identities.
 - **News wire.** Select a publisher and choose **Refresh from publisher**. SVT provides Swedish headlines, Sveriges Radio Ekot provides broadcast headlines and article links, and BBC News and The Guardian provide world headlines. Choose a headline for a text view of the publisher's feed summary and link when supplied. After closing the summary, choose **Open in text browser** to visit the publisher through w3m. Press **q**, then confirm, to return. The page depends on network access and what the publisher serves to a text browser. Caches live under `${XDG_CACHE_HOME:-~/.cache}/nightdeck`, one file per publisher, and remain available offline after a successful refresh. Failed refreshes preserve the last good cache. Each source has a 2 MiB fetch limit and retains up to 50 entries.
-- **Character sheets.** Reserved menu entry.
+- **Claude Code** (**5** or `/claude`). Claude Code needs a 64-bit (x64 or ARM64) system with 4 GB+ RAM, so it can't run on a Pi 3B with 32-bit Raspberry Pi OS. The module runs it on a bigger machine, such as your Ubuntu PC, over SSH. The deck is the screen and keyboard. Choose **Set remote host and project** and enter an SSH alias or `user@host` and a project folder such as `~/code/app`. **Launch** then runs `ssh -t <host>`, changes to that folder and starts `claude` in a login shell. **Install Claude Code on <host>** runs Anthropic's official installer (`curl -fsSL https://claude.ai/install.sh | bash`) on that machine. The other machine needs an SSH server (`sudo apt install openssh-server` on Ubuntu), and an SSH key from the Pi (`ssh-keygen`, then `ssh-copy-id user@host`) saves typing a password. On a supported 64-bit machine, the same module installs Claude Code locally and launches it in your home folder or a repository. Commands are shown for confirmation before they run.
+- **Character sheets.** Reserved menu entry. It sits unnumbered below Settings and opens with `/sheets`.
 
 ## Validation
 

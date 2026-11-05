@@ -46,6 +46,10 @@ FEEDS = (
     ("guardian", "WORLD / The Guardian", "https://www.theguardian.com/world/rss"),
 )
 LIMIT = 2 * 1024 * 1024
+EXIT_SHELL = 10  # tells the login autostart to keep the shell open
+HOST = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@:%-]*")
+REMOTE_DIR = re.compile(r"[A-Za-z0-9_./~-]{0,200}")
+CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash"
 
 # Color pairs
 HEAD, SEL, HINT, VIT, TEXT, DIM, BADGE, SELBAR, KEYCAP = range(1, 10)
@@ -188,7 +192,7 @@ def repo_url(value):
 
 def load_settings():
     defaults = {"theme": "Cyberdeck", "custom": list(THEMES["Cyberdeck"]),
-                "fx": True, "boot": True, "glyphs": "auto"}
+                "fx": True, "boot": True, "glyphs": "auto", "claude_host": "", "claude_dir": ""}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -203,6 +207,10 @@ def load_settings():
         isinstance(value, str) and COLOR.fullmatch(value) for value in custom
     ):
         defaults["custom"] = custom
+    if isinstance(saved.get("claude_host"), str) and HOST.fullmatch(saved["claude_host"]):
+        defaults["claude_host"] = saved["claude_host"]
+    if isinstance(saved.get("claude_dir"), str) and REMOTE_DIR.fullmatch(saved["claude_dir"]):
+        defaults["claude_dir"] = saved["claude_dir"]
     for flag in ("fx", "boot"):
         if isinstance(saved.get(flag), bool):
             defaults[flag] = saved[flag]
@@ -745,6 +753,7 @@ class Deck:
             if pause or code:
                 print(f"\n{yellow}Exit status {code}{reset}")
                 input("Press Enter to return to Nightdeck.")
+            return code
         except (OSError, KeyboardInterrupt, EOFError) as exc:
             print("\nCommand interrupted or unavailable.", flush=True)
             if isinstance(exc, OSError):
@@ -752,6 +761,7 @@ class Deck:
                     input("Press Enter to return to Nightdeck.")
                 except (EOFError, KeyboardInterrupt):
                     pass
+            return None
         finally:
             curses.reset_prog_mode()
             self.screen.clearok(True)
@@ -997,7 +1007,8 @@ class Deck:
             start = max(0, min(selected - count + 1, len(actions) - count))
             for index in range(start, min(len(actions), start + count)):
                 row = first + index - start
-                shortcut = f"{(index + 1) % 10:02d}" if index < 10 else "  "
+                shortcut = (f"{index + 1:02d}" if index < 9 else
+                            "00" if index == len(actions) - 1 else "--")
                 name = actions[index][1]
                 if index == selected:
                     self.put(row, f" {self.g['ptr']} {shortcut}  {name}".ljust(inner), SELBAR, True,
@@ -1017,10 +1028,10 @@ class Deck:
                 return len(actions) - 1
             if key in (10, 13, curses.KEY_ENTER):
                 return selected
-            if ord("1") <= key <= ord("9") and key - ord("1") < len(actions):
+            if ord("1") <= key <= ord("9") and key - ord("1") < min(9, len(actions) - 1):
                 return key - ord("1")
             if key == ord("0"):
-                return min(9, len(actions) - 1)
+                return len(actions) - 1
             if key in (curses.KEY_UP, ord("k")):
                 selected = (selected - 1) % len(actions)
             if key in (curses.KEY_DOWN, ord("j")):
@@ -1047,13 +1058,14 @@ class Deck:
             ("edit", "Quick code editor", lambda: self.file_pick(HOME)),
             ("notes", "Notes", self.notes),
             ("zsh", "Zsh shell", self.zsh),
+            ("claude", "Claude Code", self.claude),
             ("vitals", "System vitals", self.system),
             ("ssh", "SSH utilities", self.ssh),
             ("news", "News wire", self.news),
+            ("settings", "Settings", self.settings),
             ("sheets", "Character sheets", lambda: self.view(
                 "CHARACTER SHEETS", "Reserved.\n\nSlot allocated for a future module.")),
-            ("settings", "Settings", self.settings),
-            ("exit", "Jack out", None),
+            ("exit", "Jack out", self.power),
         ]
         if self.preferences["boot"]:
             self.boot()
@@ -1061,16 +1073,54 @@ class Deck:
         while True:
             selected = self.dashboard(actions, selected)
             action = actions[selected][2]
-            if action is None:
-                self.jack_out()
-                return
             try:
-                action()
+                leave = action()
+                if isinstance(leave, int) and not isinstance(leave, bool):
+                    return leave
             except (OSError, ValueError, RuntimeError):
                 self.notice("OPERATION FAILED",
                             "Check the path, permissions and installed commands, then retry.", ok=False)
 
     # ---------- modules ----------
+
+    def power(self):
+        """Jack out: power off, reboot or leave. Returns an exit code to leave Nightdeck."""
+        choices = ["Power off the deck", "Reboot", "Exit to shell", "Disconnect", "Cancel"]
+        intro = ["Power off shuts the Pi down. Wait for the green activity LED to stop "
+                 "before you unplug it."]
+        if os.environ.get("SSH_CONNECTION"):
+            intro.append("This SSH session will drop.")
+        choice = self.menu("JACK OUT // " + self.host.upper(), choices, intro=intro)
+        if choice in (0, 1):
+            verb = "poweroff" if choice == 0 else "reboot"
+            if shutil.which("systemctl"):
+                args = ["sudo", "systemctl", verb]
+            else:
+                args = ["sudo", verb]
+            self.jack_out()
+            if self.run(args, pause=False) == 0:
+                self.screen.timeout(1000)
+                try:
+                    for left in range(30, 0, -1):  # the system ends this process as it shuts down
+                        height, _ = self.frame("JACK OUT // " + verb.upper(), [("wait", "signal fading")])
+                        self.put(5, ("Powering down." if choice == 0 else "Rebooting.") +
+                                 " Hold on.", SEL, True, column=2)
+                        self.put(7, self.g["full"] * left, HEAD, column=2)
+                        self.screen.getch()
+                finally:
+                    self.screen.timeout(-1)
+                self.notice("JACK OUT", "Still running 30 seconds after the " + verb +
+                            " request. Check the system log.", ok=False)
+            else:
+                self.notice("JACK OUT", "The system did not accept the " + verb + " request. "
+                            "Check that your user may run sudo.", ok=False)
+            return None
+        if choice == 2:
+            return EXIT_SHELL
+        if choice == 3:
+            self.jack_out()
+            return 0
+        return None
 
     def git_view(self, label, args, repo):
         command = ["git", "--no-pager", "-c", "color.ui=false", *args]
@@ -1297,12 +1347,117 @@ class Deck:
             lines.append(f"Wi-Fi     {signal}%")
         self.view("SYSTEM // local telemetry", "\n".join(lines))
 
+    def claude(self):
+        """Claude Code: run it here on 64-bit hardware, or on a bigger machine over SSH."""
+        machine = os.uname().machine
+        supported = machine in ("x86_64", "amd64", "aarch64", "arm64")
+        selected = 0
+        while True:
+            local = shutil.which("claude")
+            host = self.preferences["claude_host"]
+            if local:
+                status = "Installed on this device."
+            elif supported:
+                status = "Not installed on this device."
+            else:
+                status = (f"This device runs {machine} (32-bit). Claude Code needs a 64-bit "
+                          "x64 or ARM64 system with 4 GB+ RAM, so run it on another machine over SSH.")
+            intro = [status, "Remote host: " + (host or "not set") +
+                     (f"  //  project: {self.preferences['claude_dir']}" if self.preferences["claude_dir"] else "")]
+            options = []
+            if local:
+                options.append(("Launch Claude Code here", self.claude_local))
+            elif supported:
+                options.append(("Install Claude Code on this device", self.claude_install_local))
+            options += [
+                ("Launch on " + (host or "remote host"), self.claude_remote),
+                ("Set remote host and project", self.claude_target),
+                ("Install Claude Code on " + (host or "remote host"), self.claude_install_remote),
+            ]
+            choice = self.menu("CLAUDE CODE // " + ("local" if local else host or "uplink"),
+                               [label for label, _ in options], intro=intro, selected=selected)
+            if choice is None:
+                return
+            selected = choice
+            options[choice][1]()
+
+    def claude_local(self):
+        places = [HOME] + sorted(p for p in REPOS.iterdir() if p.is_dir() and (p / ".git").exists()) \
+            if REPOS.is_dir() else [HOME]
+        choice = self.menu("CLAUDE CODE // working directory",
+                           ["~ (home)"] + ["~/repos/" + clean(p.name) for p in places[1:]])
+        if choice is not None:
+            self.run([shutil.which("claude") or "claude"], cwd=places[choice], pause=False)
+
+    def claude_install_local(self):
+        if not shutil.which("curl"):
+            self.notice("CLAUDE CODE", "Install curl first: sudo apt install curl", ok=False)
+            return
+        intro = ["Runs Anthropic's official installer into ~/.local/bin. "
+                 "Log in afterwards by launching Claude Code."]
+        mem = self.telemetry.poll().get("mem")
+        if mem and mem[1] < 3500:
+            intro.append(f"This device has {mem[1]} MiB RAM. Claude Code asks for 4 GB and may run poorly.")
+        args = ["bash", "-c", CLAUDE_INSTALL]
+        intro.append("$ " + shlex.join(args))
+        if self.menu("CLAUDE CODE // install", ["Cancel", "Run installer"], intro=intro) == 1:
+            self.run(args)
+
+    def claude_target(self):
+        host = self.ask("CLAUDE CODE // SSH host alias or user@host", prefix="")
+        if host is None:
+            return
+        host = host.strip()
+        if host and not HOST.fullmatch(host):
+            self.notice("CLAUDE CODE", "Use a host alias from ~/.ssh/config or user@host.", ok=False)
+            return
+        folder = self.ask("CLAUDE CODE // project folder on that host, e.g. ~/code/app (blank for home)",
+                          prefix="")
+        if folder is None:
+            return
+        folder = folder.strip()
+        if not REMOTE_DIR.fullmatch(folder) or ".." in folder.split("/"):
+            self.notice("CLAUDE CODE", "Use a plain path with letters, digits, . _ - / and ~.", ok=False)
+            return
+        settings = dict(self.preferences, claude_host=host, claude_dir=folder)
+        save_settings(settings)
+        self.preferences = settings
+        if host:
+            self.notice("CLAUDE CODE", f"Remote target set to {host}.")
+
+    def remote_args(self, command):
+        host = self.preferences["claude_host"]
+        if not host:
+            self.claude_target()
+            host = self.preferences["claude_host"]
+            if not host:
+                return None
+        folder = self.preferences["claude_dir"]
+        if folder.startswith("~"):
+            folder = folder[1:].lstrip("/")
+            target = '"$HOME"/' + shlex.quote(folder) if folder else '"$HOME"'
+        else:
+            target = shlex.quote(folder) if folder else '"$HOME"'
+        # A login shell puts ~/.local/bin, where the installer puts claude, on PATH.
+        script = f"cd -- {target} && exec \"${{SHELL:-bash}}\" -lc {shlex.quote(command)}"
+        return ["ssh", "-t", "--", host, script]
+
+    def claude_remote(self):
+        args = self.remote_args("claude")
+        if args and self.confirm("CLAUDE CODE // uplink to " + self.preferences["claude_host"], args):
+            self.run(args, pause=False)
+
+    def claude_install_remote(self):
+        args = self.remote_args(CLAUDE_INSTALL)
+        if args and self.confirm("CLAUDE CODE // install on " + self.preferences["claude_host"], args):
+            self.run(args)
+
     def ssh(self):
         choice = self.menu("SSH // client tools", ["Connect to host or alias", "Edit ~/.ssh/config",
                                                    "List agent identities"])
         if choice == 0:
             host = self.ask("SSH // host alias or user@host")
-            if host and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@:%-]*", host):
+            if host and HOST.fullmatch(host):
                 args = ["ssh", "--", host]
                 if self.confirm("SSH CONNECT", args):
                     self.run(args)
@@ -1408,6 +1563,7 @@ def configure_locale():
 if __name__ == "__main__":
     configure_locale()
     try:
-        curses.wrapper(lambda screen: Deck(screen).main())
+        os.environ["NIGHTDECK"] = "1"  # child shells must not autostart another deck
+        sys.exit(curses.wrapper(lambda screen: Deck(screen).main()) or 0)
     except KeyboardInterrupt:
-        pass
+        sys.exit(130)
