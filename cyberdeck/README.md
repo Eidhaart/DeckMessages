@@ -12,21 +12,36 @@ telemetry straight from `/proc` and `/sys`.
 
 ```bash
 cd cyberdeck
-./install.sh               # installs the `netdeck` command + an app-menu launcher (no sudo)
-netdeck
+./install.sh --login       # install, and boot into the deck fullscreen every time you log in
 ```
 
-Or run it without installing: `python3 cyberdeck/netdeck.py`.
+Then log out and back in, or run `netdeck-session` to try it now. The deck opens in a fullscreen terminal window
+right after your desktop loads, with the full boot sequence. When you jack out (`quit` / F10), the window stays open
+as a normal shell. Type `netdeck` to jump back in.
 
-| Flag | Effect |
+| Installer option | Effect |
+|---|---|
+| *(none)* | installs the `netdeck` command plus a NETDECK//OS entry in your app menu (no sudo) |
+| `--login` | opens the deck fullscreen automatically at every login |
+| `--every-terminal` | also opens the deck in every new terminal window you open |
+| `--uninstall` | removes everything the installer added |
+
+The login launcher picks your terminal automatically: kitty, Alacritty or WezTerm if you've installed one, otherwise
+GNOME Terminal, Ptyxis (Ubuntu 25.10+), Console, Konsole, xfce4-terminal or Tilix. To force a particular one, put
+this in `~/.config/netdeck/session.conf`:
+
+```bash
+NETDECK_TERMINAL="kitty --start-as=fullscreen"
+```
+
+You can also run it without installing: `python3 cyberdeck/netdeck.py`.
+
+| `netdeck` flag | Effect |
 |---|---|
 | `--no-boot` / `--fast` | skip or speed up the boot sequence (any key also skips it) |
 | `--theme <name>` | `netrunner` (default), `arasaka`, `netwatch`, `toxic`, `afterlife`, `amber` |
 | `--no-fx` | no glitches or typing effects |
 | `--list-apps` | print the categorized program list to stdout and exit |
-
-**Make it your terminal's default:** `./install.sh --autostart` opens the deck every time you open a terminal.
-It skips tmux, ssh sessions and the deck's own shell. `./install.sh --uninstall` removes everything.
 
 ## What's on screen
 
@@ -90,6 +105,7 @@ It also groups the command-line tools you have installed into `TERM // EDITORS`,
 - Use a 256-color terminal such as GNOME Terminal, Kitty, Alacritty or WezTerm, at least 120×36. It works down to 80×24.
 - Set the terminal background to near-black (`#0d0d10`) and use a monospace font such as *JetBrains Mono*,
   *Fira Code* or *Share Tech Mono*.
-- Go fullscreen (F11) and set `./install.sh --autostart`. Every terminal then boots into the deck.
+- Install with `--login` so the laptop boots straight into the deck. Ptyxis and WezTerm have no fullscreen
+  launch option, so press F11 once there.
 
 Settings are saved in `~/.config/netdeck/config.json`, notes in `~/.local/share/netdeck/shards.log`.
