@@ -1,101 +1,112 @@
-# DeckMessages
+# NETDECK//OS
 
-A cyberpunk terminal client for Facebook Messenger, for desktop (Windows, macOS, Linux) and Android.
+A full-screen cyberpunk terminal dashboard that makes your Ubuntu box feel like a corp machine that was hijacked
+and rebuilt for a netrunner.
 
-```
-DECK//MSG   # Nyx                                         ● ONLINE  22:01:02
-// CHANNELS │ 19:00 <Nyx> did you see the skyline tonight
-01 # Nyx    │ 19:10 <you> yeah it looked unreal
-02 # Vex    │ 22:00 * you pulls on a jacket
-03 # Mom  1 │ deck@nyx:~$ _
-```
+![NETDECK//OS dashboard](screenshot.png)
 
-- **Terminal UI:** CRT scanlines, flicker, glitch text and neon glow. Four palettes (`neon`, `amber`, `toxic`,
-  `ice`) and a skippable boot sequence.
-- **Commands:** `/list`, `/go <n|name>`, `/me`, `/theme`, `/fx`, `/bridge`, `/clear`, `/help`, and more.
-  Tab completes commands and channel names, and Up/Down recalls history.
-- **Keyboard first:** Alt+↑/↓ switches channels and Ctrl+L clears the screen. On phones, a slide-out channel
-  drawer and a send button take over.
-- **Real Messenger chats:** through the [mautrix-meta](https://github.com/mautrix/meta) bridge on a free cloud
-  VM, set up with one command. Images, emotes, unread counts and read receipts work.
-- **Demo mode:** a built-in offline backend with fictional contacts for trying the UI with no setup.
+It's one Python file with **no dependencies**. It uses Python 3 and curses, which Ubuntu already ships, and reads live
+telemetry straight from `/proc` and `/sys`.
 
-## Bonus: NETDECK//OS
-
-[`cyberdeck/`](cyberdeck/README.md) holds a standalone, dependency-free terminal dashboard in the same style. It turns an
-Ubuntu terminal into a hijacked-corp cyberdeck, with live telemetry, a categorized launcher for every installed
-program, a command console and a drop-to-shell mode. Run `python3 cyberdeck/netdeck.py`.
-
-## Why a bridge?
-
-Meta has no public API for personal Messenger accounts. DeckMessages is a [Matrix](https://matrix.org) client,
-and a bridge relays your Messenger chats into Matrix. It runs on a free cloud VM (no hardware or domain needed):
+## Jack in
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Eidhaart/DeckMessages/HEAD/server/install.sh | sudo bash
+git clone https://github.com/Eidhaart/DeckMessages.git netdeck
+cd netdeck
+./install.sh --login       # install, and boot into the deck fullscreen every time you log in
 ```
 
-**Step-by-step guide, including creating the free VM: [docs/SERVER.md](docs/SERVER.md).**
+Then log out and back in, or run `netdeck-session` to try it now. The deck opens in a fullscreen terminal window
+right after your desktop loads, with the full boot sequence. When you jack out (`quit` / F10), the window stays open
+as a normal shell. Type `netdeck` to jump back in.
 
-## Stack
+| Installer option | Effect |
+|---|---|
+| *(none)* | installs the `netdeck` command plus a NETDECK//OS entry in your app menu (no sudo) |
+| `--login` | opens the deck fullscreen automatically at every login |
+| `--every-terminal` | also opens the deck in every new terminal window you open |
+| `--uninstall` | removes everything the installer added |
 
-[Tauri 2](https://tauri.app) wraps a React and TypeScript UI (Vite), so one codebase ships as a small native
-desktop app and an Android APK. Matrix support comes from `matrix-js-sdk` with Rust crypto (WASM).
-
-```
-src/
-  App.tsx               layout, state, shortcuts
-  commands.ts           slash commands and tab completion
-  transport/types.ts    backend interface the UI talks to
-  transport/matrix.ts   Matrix / Messenger-bridge backend
-  transport/demo.ts     offline demo backend
-  components/           boot, login, sidebar, log, prompt
-src-tauri/              native shell (desktop + Android)
-server/install.sh       one-command server setup (Synapse + bridge + HTTPS)
-```
-
-## Development
-
-Requires Node 22+ and Rust (stable). See the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for
-your OS. On Linux that means `libwebkit2gtk-4.1-dev`, among others.
+The login launcher picks your terminal automatically: kitty, Alacritty or WezTerm if you've installed one, otherwise
+GNOME Terminal, Ptyxis (Ubuntu 25.10+), Console, Konsole, xfce4-terminal or Tilix. To force a particular one, put
+this in `~/.config/netdeck/session.conf`:
 
 ```bash
-npm install
-npm run dev            # UI only, in the browser at http://localhost:1420
-npm run tauri dev      # desktop app with hot reload
-npm run tauri build    # installers in src-tauri/target/release/bundle/
+NETDECK_TERMINAL="kitty --start-as=fullscreen"
 ```
 
-### Android
+You can also run it without installing: `python3 netdeck.py`.
 
-**Easiest way to get the APK:** every push runs the *Android APK* workflow. Open the run under the repo's
-**Actions** tab, download the `DeckMessages-android` artifact, unzip it, and install the APK on your phone
-(allow installs from unknown sources when asked).
+| `netdeck` flag | Effect |
+|---|---|
+| `--no-boot` / `--fast` | skip or speed up the boot sequence (any key also skips it) |
+| `--theme <name>` | `netrunner` (default), `arasaka`, `netwatch`, `toxic`, `afterlife`, `amber` |
+| `--no-fx` | no glitches or typing effects |
+| `--list-apps` | print the categorized program list to stdout and exit |
 
-To keep updates installing over the old version, sign every build with the same key by adding these repo secrets:
+## What's on screen
 
-| Secret | Value |
-| --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 release.jks` |
-| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
-| `ANDROID_KEY_ALIAS` | key alias |
+- **SYSCORE:** total and per-core CPU (a heatmap on big CPUs), load history sparkline, load average, uptime
+- **MEMORY / STORAGE:** RAM, swap and cache, plus every real mounted volume
+- **BIOMON:** hardware temperatures and battery, if present
+- **NET UPLINK:** interface, IP, gateway, live RX/TX sparklines, totals
+- **NEURAL LINK:** an animated synapse waveform with an ECG spike, sync %, BPM, and a **TRACE** meter. When TRACE
+  climbs to 100%, Netwatch's trace attempt gets deflected and the screen glitches.
+- **PROCESSES:** the top processes by CPU, live
+- **CONSOLE // NETWATCH FEED:** command output, real alerts (CPU spikes, memory pressure, low battery, data surges,
+  full disks) and atmospheric chatter
+- A scrolling news ticker, a blinking `HIJACKED` status, a clock, and a hex DATASTREAM
 
-Without them, each build gets a throwaway key and you'll need to uninstall before installing a new build.
+Effects include a CRT power-on and boot sequence (firmware check, intrusion alarm, the daemons breaking ICE, then the
+logo decoding out of noise), alternating scanline rows, random signal glitches, typed-out console lines, katakana
+data rain and a CRT power-off when you quit.
 
-**Building locally** needs the Android SDK and NDK, `JAVA_HOME`, `ANDROID_HOME`, `NDK_HOME`, and the Rust target.
-The Android project is already generated in `src-tauri/gen/android`.
+## Commands
 
-```bash
-rustup target add aarch64-linux-android
-npm run tauri android dev                              # run on a USB-connected phone or an emulator
-npm run tauri android build -- --apk --target aarch64  # unsigned APK, sign with apksigner
-```
+Type at the prompt. **Tab** completes commands, programs and paths, and **↑/↓** walks your history.
 
-The phone must reach your homeserver over **HTTPS**.
+| Command | What it does |
+|---|---|
+| `apps [filter]` / **F2** | **Arsenal:** every installed program sorted into categories (see below). Arrow keys move, Enter launches, `/` searches everything. |
+| `run <prog> [args]` | Launches a program. GUI apps detach. Terminal programs (vim, htop, ssh…) take over the screen and give it back when they exit. |
+| `<anything>` | Any program name works directly. `firefox` opens Firefox, `htop` takes the screen, and `ls`, `git status` or `ping` stream their output into the console. |
+| `!<cmd>` / `exec <cmd>` | Forces a shell command into the console. Pipes, globs and `&&` all work. **Ctrl+C** kills it. |
+| `shell` / **F4** | Drops you into your real shell with a themed prompt. `exit` (or `deck`) brings you back. |
+| `spawn <cmd>` | Runs any command detached in the background |
+| `open <path\|url>` | Opens with the default app (`xdg-open`) |
+| `cd <dir>` | Changes the deck's working directory (shown in the prompt) |
+| `procs` / **F3** | Process manager: sort, filter, `k` sends SIGTERM, `K` sends SIGKILL |
+| `kill <pid\|name>` | Terminates a process |
+| `scan` / **F5** | Recon: interfaces, ARP neighbours, listening ports, established links |
+| `sysinfo` / **F7** | Hardware and identity dossier |
+| `theme [name]` / **F9** | Switches the skin (F9 cycles through them) |
+| `fx [on\|off\|scan\|boot]` | Toggles effects, scanlines or the boot sequence |
+| `rain` / **F6** | Data-rain screensaver |
+| `memo <text>` / `shards` | Writes and reads quick notes ("data shards") |
+| `update` | `sudo apt update && sudo apt full-upgrade` |
+| `lock` · `suspend` · `reboot` · `poweroff` | Session and power control. Suspend, reboot and power-off ask for confirmation. |
+| `history` · `clear` · `glitch` · `help` (**F1**) | |
+| `quit` / **F10** / **Ctrl+D** | Jacks out |
 
-## Roadmap ideas
+Other keys: **PgUp/PgDn** scroll the console, **Ctrl+L** clears it, **Ctrl+U/W** edit the input line.
 
-- Native notifications (`tauri-plugin-notification`) and a background sync service on Android
-- Typing indicators, reactions, replies and edits in the UI
-- Sending images and files
-- Login with a QR code or SSO
+### Arsenal categories
+
+The deck reads every `.desktop` launcher (system, `~/.local`, snap and flatpak) and sorts it:
+
+`ICEBREAKERS` (security) · `CODE FORGE` (development) · `NET UPLINK` (internet) · `MEDIA SYNTH` (audio/video) ·
+`VISUAL CORTEX` (graphics) · `CORPO SUITE` (office) · `SIM ARCADE` (games) · `DATA LAB` (science/education) ·
+`SYS CORE` (system) · `CONFIG MATRIX` (settings) · `UTILITIES` · `UNSORTED`
+
+It also groups the command-line tools you have installed into `TERM // EDITORS`, `NETRUN`, `MONITOR`, `FILES`,
+`FORGE`, `SYSTEM` and `FUN`, and lists every executable on your `$PATH` under `PATH // ALL`.
+
+## For the full effect
+
+- Use a 256-color terminal such as GNOME Terminal, Kitty, Alacritty or WezTerm, at least 120×36. It works down to 80×24.
+- Set the terminal background to near-black (`#0d0d10`) and use a monospace font such as *JetBrains Mono*,
+  *Fira Code* or *Share Tech Mono*.
+- Install with `--login` so the laptop boots straight into the deck. Ptyxis and WezTerm have no fullscreen
+  launch option, so press F11 once there.
+
+Settings are saved in `~/.config/netdeck/config.json`, notes in `~/.local/share/netdeck/shards.log`.

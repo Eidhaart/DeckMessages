@@ -10,7 +10,7 @@
 DECK="${NETDECK_BIN:-$HOME/.local/bin/netdeck}"
 [[ -x "$DECK" ]] || DECK="$(command -v netdeck || true)"
 if [[ -z "$DECK" ]]; then
-  notify-send "NETDECK//OS" "netdeck is not installed - run cyberdeck/install.sh" 2>/dev/null
+  notify-send "NETDECK//OS" "netdeck is not installed - run install.sh from the netdeck repo" 2>/dev/null
   exit 1
 fi
 
