@@ -58,6 +58,32 @@ This uses a small root helper, `/usr/local/sbin/netdeck-switch-root`, which does
 | `./install.sh --uninstall` | removes everything, including the login session |
 | `python3 netdeck.py` | run it once without installing |
 
+## Cyberpunk zsh (oh-my-zsh)
+
+`zsh/` styles your everyday terminal to match the deck: oh-my-zsh, a two-line HUD prompt, and themed syntax
+highlighting, autosuggestions and fzf.
+
+```bash
+./zsh/install-zsh.sh            # zsh, oh-my-zsh, plugins, the netrunner theme  (--default also makes zsh your shell)
+```
+
+```
+◢ NETDECK // you@laptop // zsh 5.9 // 05.11.2026 18:49 // link stable
+┏━ ◢ you@laptop // ~/projects/netdeck  ⎇ main ●
+┗━▶ git status                                                     ✗ 1 · 4s · 18:49:35
+```
+
+- **Colors follow the deck's skin** automatically. `deckskin sodium` switches the current shell, and `deckskin sync`
+  follows the deck again. Truecolor where the terminal supports it.
+- **The prompt shows:** your user (red when you're root), the folder, the git branch (● for uncommitted changes),
+  `⇄ ssh` over SSH, and `deck link` inside the deck's shell. On the right: the exit code when a command fails, how
+  long slow commands took, and the time.
+- **Plugins:** autosuggestions, syntax highlighting, history substring search (type, then ↑), git, sudo (Esc Esc),
+  extract, colored man pages, fzf and zoxide when installed.
+- **Shortcuts:** `deck`, `jackin`, `skin`, and `ls`/`ll`/`tree` through eza when it's installed.
+- Your old `~/.zshrc` is saved as `~/.zshrc.pre-netdeck` (`--undo` restores it). Put your own lines in
+  `~/.zshrc.local`, which future updates never overwrite.
+
 ## Make it yours (F8)
 
 Press **F8** (or type `settings`) for the tuning screen, with a live preview:
