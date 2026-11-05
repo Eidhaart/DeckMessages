@@ -9,6 +9,9 @@
 # To force a specific terminal, set it in ~/.config/netdeck/session.conf, e.g.:
 #   NETDECK_TERMINAL="kitty --start-as=fullscreen"
 # (the deck command is appended to whatever you put there)
+# In the NETDECK session the deck uses only the laptop's built-in screen (eDP/LVDS/DSI); other monitors are
+# switched off for that session only. To pick a different screen, e.g.:  NETDECK_OUTPUT="HDMI-A-1"
+# (list the names with `wlr-randr` from the deck's shell)
 
 MODE=desktop
 case "${1:-}" in
@@ -43,9 +46,29 @@ if [[ $MODE == kiosk ]]; then
   # turn off the one-time automatic login a session switch may have left on
   sudo -n /usr/local/sbin/netdeck-switch-root --restore >/dev/null 2>&1 || true
   # -d: no window decorations   -s: allow Ctrl+Alt+F1..F7 to switch consoles
-  exec cage -d -s -- "$(readlink -f "$0")" --kiosk-inner
+  # -m last: show on one monitor instead of stretching across all of them
+  exec cage -d -s -m last -- "$(readlink -f "$0")" --kiosk-inner
 fi
 [[ $MODE == kiosk-inner ]] && export NETDECK_KIOSK=1
+
+# ---- deck session: keep only the main (built-in) screen on. Session-local; Ubuntu's own setup is untouched.
+pick_display() {
+  have wlr-randr || return 0
+  local outs=() keep="${NETDECK_OUTPUT:-}" o
+  mapfile -t outs < <(wlr-randr 2>/dev/null | awk '/^[^ \t]/ {print $1}')
+  (( ${#outs[@]} > 1 )) || return 0
+  if [[ -z $keep ]]; then
+    for o in "${outs[@]}"; do
+      case "$o" in eDP*|LVDS*|DSI*) keep="$o"; break ;; esac
+    done
+  fi
+  [[ -z $keep ]] && keep="${outs[0]}"
+  wlr-randr --output "$keep" --on >/dev/null 2>&1
+  for o in "${outs[@]}"; do
+    [[ "$o" == "$keep" ]] || wlr-randr --output "$o" --off >/dev/null 2>&1
+  done
+}
+[[ $MODE == kiosk-inner ]] && pick_display
 
 # ---- what runs inside the terminal window
 #  exit 0  -> kiosk: end the session / desktop: leave a normal shell open

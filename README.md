@@ -42,6 +42,9 @@ This uses a small root helper, `/usr/local/sbin/netdeck-switch-root`, which does
 `/etc/sudoers.d/netdeck` lets your user run it without a password. `./install.sh --uninstall` removes both.
 
 - **No password at boot:** Settings → System → Users → **Automatic Login**. Power on, and the deck boots.
+- **Multiple monitors:** in the NETDECK session the deck uses only the laptop's built-in screen, and other monitors
+  are switched off for that session. Your Ubuntu session keeps its own monitor setup. To use a different screen, put
+  `NETDECK_OUTPUT="HDMI-A-1"` in `~/.config/netdeck/session.conf` (`wlr-randr` in the deck's shell lists the names).
 - **Opening graphical apps:** apps like Firefox open fullscreen on top of the deck. Close them to return.
 - **Emergency exit:** Ctrl+Alt+F3 switches to a text console.
 

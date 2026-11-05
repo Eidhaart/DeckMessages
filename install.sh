@@ -92,6 +92,7 @@ fi
 if (( SESSION )); then
   pkgs=()
   command -v cage >/dev/null || pkgs+=(cage)
+  command -v wlr-randr >/dev/null || pkgs+=(wlr-randr)   # keeps the deck on the laptop screen only
   if ! command -v foot >/dev/null && ! command -v kitty >/dev/null && ! command -v alacritty >/dev/null; then
     pkgs+=(foot)
   fi
