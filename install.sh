@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
-# NETDECK//OS installer - user-level, no root needed.
+# NETDECK//OS installer.
 #
-#   ./install.sh                  install the `netdeck` command + app-menu launcher
-#   ./install.sh --login          ...and open the deck fullscreen every time you log in   (recommended)
+#   ./install.sh                  install the `netdeck` command + app-menu launcher (no sudo)
+#   ./install.sh --session        ...and add NETDECK//OS to the login screen: the deck IS the session,
+#                                 no desktop loads behind it (needs sudo once)          (recommended)
+#   ./install.sh --login          ...or open the deck fullscreen on top of your normal desktop at login
 #   ./install.sh --every-terminal ...and open the deck in every new terminal window
-#   ./install.sh --login --every-terminal   both
 #   ./install.sh --uninstall      remove everything this script added
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 BIN="$BIN_DIR/netdeck"
-SESSION="$BIN_DIR/netdeck-session"
+SESSION_BIN="$BIN_DIR/netdeck-session"
 APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 DESKTOP="$APP_DIR/netdeck.desktop"
 AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 AUTOSTART="$AUTOSTART_DIR/netdeck.desktop"
+SESSION_FILE=/usr/share/wayland-sessions/netdeck.desktop
+KIOSK_BIN=/usr/local/bin/netdeck-kiosk
 RC="$HOME/.bashrc"
 MARK_BEGIN="# >>> netdeck autostart >>>"
 MARK_END="# <<< netdeck autostart <<<"
@@ -23,13 +26,14 @@ MARK_END="# <<< netdeck autostart <<<"
 red=$'\e[38;5;203m'; cyan=$'\e[38;5;87m'; yel=$'\e[38;5;227m'; dim=$'\e[38;5;95m'; rst=$'\e[0m'
 say() { printf '%s◢%s %s\n' "$red" "$rst" "$*"; }
 
-LOGIN=0; TERMINAL=0; UNINSTALL=0
+SESSION=0; LOGIN=0; TERMINAL=0; UNINSTALL=0
 for arg in "$@"; do
   case "$arg" in
+    --session|--kiosk)             SESSION=1 ;;
     --login|--boot)                LOGIN=1 ;;
     --every-terminal|--autostart)  TERMINAL=1 ;;
     --uninstall)                   UNINSTALL=1 ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) say "unknown option: $arg (try --help)"; exit 1 ;;
   esac
 done
@@ -42,8 +46,12 @@ remove_terminal_autostart() {
 }
 
 if (( UNINSTALL )); then
-  rm -f "$BIN" "$SESSION" "$DESKTOP"
-  [[ -f "$AUTOSTART" ]] && rm -f "$AUTOSTART" && say "login autostart removed"
+  rm -f "$BIN" "$SESSION_BIN" "$DESKTOP"
+  if [[ -f "$AUTOSTART" ]]; then rm -f "$AUTOSTART"; say "login autostart removed"; fi
+  if [[ -e "$SESSION_FILE" || -e "$KIOSK_BIN" ]]; then
+    say "removing the NETDECK//OS login session (sudo)"
+    sudo rm -f "$SESSION_FILE" "$KIOSK_BIN"
+  fi
   remove_terminal_autostart
   say "netdeck uninstalled. config kept in ~/.config/netdeck, shards in ~/.local/share/netdeck"
   exit 0
@@ -54,7 +62,7 @@ python3 -c 'import curses' 2>/dev/null || { say "python3 curses module missing";
 
 mkdir -p "$BIN_DIR" "$APP_DIR"
 install -m 0755 "$HERE/netdeck.py" "$BIN"
-install -m 0755 "$HERE/netdeck-session.sh" "$SESSION"
+install -m 0755 "$HERE/netdeck-session.sh" "$SESSION_BIN"
 say "installed ${cyan}$BIN${rst}"
 
 cat > "$DESKTOP" <<EOF
@@ -63,7 +71,7 @@ Type=Application
 Name=NETDECK//OS
 GenericName=Cyberdeck Dashboard
 Comment=Hijacked corp terminal for netrunners
-Exec=$SESSION
+Exec=$SESSION_BIN
 Icon=utilities-terminal
 Terminal=false
 Categories=System;Monitor;
@@ -71,21 +79,44 @@ Keywords=cyberpunk;dashboard;terminal;monitor;
 EOF
 say "app-menu launcher: ${cyan}NETDECK//OS${rst} ${dim}(opens fullscreen)${rst}"
 
+if (( SESSION )); then
+  pkgs=()
+  command -v cage >/dev/null || pkgs+=(cage)
+  if ! command -v foot >/dev/null && ! command -v kitty >/dev/null && ! command -v alacritty >/dev/null; then
+    pkgs+=(foot)
+  fi
+  if command -v fc-list >/dev/null && ! fc-list | grep -qi "JetBrains Mono"; then
+    pkgs+=(fonts-jetbrains-mono)
+  fi
+  if (( ${#pkgs[@]} )); then
+    say "installing ${cyan}${pkgs[*]}${rst} (sudo)"
+    sudo apt-get install -y "${pkgs[@]}"
+  fi
+  say "registering the NETDECK//OS login session (sudo)"
+  sudo install -d /usr/share/wayland-sessions
+  printf '%s\n' '#!/bin/sh' '# Entry point for the NETDECK//OS login session (see netdeck-session).' \
+    'exec "$HOME/.local/bin/netdeck-session" --kiosk' | sudo tee "$KIOSK_BIN" >/dev/null
+  sudo chmod 755 "$KIOSK_BIN"
+  printf '%s\n' '[Desktop Entry]' 'Name=NETDECK//OS' 'Comment=Boot straight into the cyberdeck - no desktop' \
+    "Exec=$KIOSK_BIN" "TryExec=$KIOSK_BIN" 'Type=Application' 'DesktopNames=NETDECK' \
+    | sudo tee "$SESSION_FILE" >/dev/null
+  say "login session installed: ${cyan}$SESSION_FILE${rst}"
+fi
+
 if (( LOGIN )); then
   mkdir -p "$AUTOSTART_DIR"
   cat > "$AUTOSTART" <<EOF
 [Desktop Entry]
 Type=Application
 Name=NETDECK//OS
-Comment=Boot into the cyberdeck on login
-Exec=$SESSION
+Comment=Open the cyberdeck on login
+Exec=$SESSION_BIN
 Icon=utilities-terminal
 Terminal=false
 X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=2
+X-GNOME-Autostart-Phase=Applications
 EOF
-  say "login autostart: ${cyan}$AUTOSTART${rst}"
-  say "the deck now boots fullscreen every time you log in"
+  say "desktop login autostart: ${cyan}$AUTOSTART${rst}"
 fi
 
 if (( TERMINAL )); then
@@ -106,8 +137,16 @@ case ":$PATH:" in
   *) say "${yel}note:${rst} $BIN_DIR is not on your PATH yet - log out and back in (Ubuntu adds it automatically)" ;;
 esac
 
-if (( LOGIN )); then
-  printf '\n%s   try it now:%s netdeck-session%s   %s(or just log out and back in)%s\n\n' "$dim" "$yel" "$rst" "$dim" "$rst"
+if (( SESSION )); then
+  printf '\n%s   one-time setup at the login screen:%s\n' "$dim" "$rst"
+  printf '     1. log out, then click your name\n'
+  printf '     2. click the %sgear icon%s (bottom right) and pick %sNETDECK//OS%s\n' "$yel" "$rst" "$yel" "$rst"
+  printf '     3. log in - the deck is the whole screen. Ubuntu remembers the choice.\n\n'
+  printf '%s   no password at boot:%s Settings → System → Users → Automatic Login\n' "$dim" "$rst"
+  printf '%s   back to normal Ubuntu:%s F10 (log out), then pick "Ubuntu" with the gear icon\n\n' "$dim" "$rst"
+elif (( LOGIN )); then
+  printf '\n%s   try it now:%s netdeck-session%s   %s(or log out and back in)%s\n\n' "$dim" "$yel" "$rst" "$dim" "$rst"
 else
-  printf '\n%s   jack in with:%s netdeck%s   %s(add --login to boot into it at every login)%s\n\n' "$dim" "$yel" "$rst" "$dim" "$rst"
+  printf '\n%s   jack in with:%s netdeck%s   %s(add --session to make it your whole login session)%s\n\n' \
+    "$dim" "$yel" "$rst" "$dim" "$rst"
 fi

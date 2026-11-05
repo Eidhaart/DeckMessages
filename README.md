@@ -1,112 +1,111 @@
 # NETDECK//OS
 
-A full-screen cyberpunk terminal dashboard that makes your Ubuntu box feel like a corp machine that was hijacked
-and rebuilt for a netrunner.
+A cyberpunk deck that takes over your whole Ubuntu screen, styled like a corp machine that was hijacked and rebuilt
+for a netrunner. It isn't a window on your desktop. It can **be** the session: you log in, and the deck boots.
 
 ![NETDECK//OS dashboard](screenshot.png)
 
-It's one Python file with **no dependencies**. It uses Python 3 and curses, which Ubuntu already ships, and reads live
-telemetry straight from `/proc` and `/sys`.
+The deck itself is one Python file with no dependencies, using Python 3 and curses. It reads live telemetry from
+`/proc` and `/sys`.
 
-## Jack in
+## Install
 
 ```bash
 git clone https://github.com/Eidhaart/DeckMessages.git netdeck
 cd netdeck
-./install.sh --login       # install, and boot into the deck fullscreen every time you log in
+./install.sh --session
 ```
 
-Then log out and back in, or run `netdeck-session` to try it now. The deck opens in a fullscreen terminal window
-right after your desktop loads, with the full boot sequence. When you jack out (`quit` / F10), the window stays open
-as a normal shell. Type `netdeck` to jump back in.
+`--session` adds **NETDECK//OS** to the Ubuntu login screen. It installs
+[`cage`](https://github.com/cage-kiosk/cage) (a tiny kiosk display server), the `foot` terminal and the JetBrains Mono
+font if they're missing, which needs sudo once.
 
-| Installer option | Effect |
+**One-time setup:** log out, click your name, click the **gear icon** in the bottom right, pick **NETDECK//OS**, and
+log in. Ubuntu remembers that choice. From then on there's no desktop, no panel and no delay: the screen goes from
+login straight into the deck's boot sequence.
+
+- **No password at boot:** Settings → System → Users → **Automatic Login**. Power on, and the deck boots.
+- **Back to normal Ubuntu:** F10 logs out. Pick "Ubuntu" with the gear icon.
+- **Opening graphical apps:** apps like Firefox open fullscreen on top of the deck. Close them to return.
+- **Emergency exit:** Ctrl+Alt+F3 switches to a text console.
+
+### Other ways to run it
+
+| Command | What you get |
 |---|---|
-| *(none)* | installs the `netdeck` command plus a NETDECK//OS entry in your app menu (no sudo) |
-| `--login` | opens the deck fullscreen automatically at every login |
-| `--every-terminal` | also opens the deck in every new terminal window you open |
-| `--uninstall` | removes everything the installer added |
+| `./install.sh` | the `netdeck` command plus an app-menu entry that opens it fullscreen |
+| `./install.sh --login` | opens the deck fullscreen on top of your normal desktop at login |
+| `./install.sh --every-terminal` | opens the deck in every new terminal window |
+| `./install.sh --uninstall` | removes everything, including the login session |
+| `python3 netdeck.py` | run it once without installing |
 
-The login launcher picks your terminal automatically: kitty, Alacritty or WezTerm if you've installed one, otherwise
-GNOME Terminal, Ptyxis (Ubuntu 25.10+), Console, Konsole, xfce4-terminal or Tilix. To force a particular one, put
-this in `~/.config/netdeck/session.conf`:
+## Make it yours (F8)
 
-```bash
-NETDECK_TERMINAL="kitty --start-as=fullscreen"
+Press **F8** (or type `settings`) for the tuning screen, with a live preview:
+
+- **Themes:** `netrunner`, `arasaka`, `netwatch`, `toxic`, `afterlife`, `amber`, plus any you save yourself.
+- **Every color:** 12 roles (frames, highlights, text, background, scanlines, alerts…). Step with ←/→ or type a
+  `#hex` value or a 0–255 number. **Save as new theme** keeps your mix.
+- **Font family and size:** cycle through your installed monospace fonts. The NETDECK session and the app-menu
+  launcher apply them to the terminal, and **Apply font now** restarts the window instantly.
+- **Effects:** glitches, scanlines, boot sequence, news ticker, and the small neural-link readout in the top bar.
+- **Panels:** turn any panel on or off, including CPU, memory, storage, network, vitals, processes, dock and console,
+  plus the optional big neural-link and datastream panels.
+
+The same things work as commands: `theme save mine`, `color pri #ff2a6d`, `font "Fira Code" 14`, `fonts`,
+`panel neural on`, `relaunch`. Everything is saved to `~/.config/netdeck/config.json`, which you can also edit by hand.
+`layout` controls which panels go in which column and in what order:
+
+```json
+"layout": {"left": ["sys", "mem", "disk", "net", "bio", "procs"], "right": ["dock", "console"]}
 ```
 
-You can also run it without installing: `python3 netdeck.py`.
+To force a particular terminal for the session, put `NETDECK_TERMINAL="kitty --start-as=fullscreen"` in
+`~/.config/netdeck/session.conf`.
 
-| `netdeck` flag | Effect |
+## The dock
+
+Pin up to 9 commands and launch them with **Alt+1 … Alt+9**: `pin nvim`, `pin gh dash`, `pin firefox`, `unpin 3`.
+On first run it fills itself with whatever good tools you already have.
+
+## Arsenal (F2): every program, plus the black market
+
+`apps` lists everything on the machine by category. It covers every desktop app, plus a curated catalog of about 140
+**terminal apps**. You can install the ones you don't have yet right from the list: select one and press **Enter** or
+**i**, or type `get <name>`. Installs try apt first, then snap, pipx or the project's official installer.
+Press **m** to hide what isn't installed.
+
+| Category | Highlights |
 |---|---|
-| `--no-boot` / `--fast` | skip or speed up the boot sequence (any key also skips it) |
-| `--theme <name>` | `netrunner` (default), `arasaka`, `netwatch`, `toxic`, `afterlife`, `amber` |
-| `--no-fx` | no glitches or typing effects |
-| `--list-apps` | print the categorized program list to stdout and exit |
+| CODE // IDE & EDITORS | **Neovim**, **LazyVim** (Neovim set up like VS Code), **Helix**, **Micro**, **Claude Code**, Codex CLI, Gemini CLI, Aider, Vim, Emacs |
+| GIT // GITHUB | **lazygit**, **GitHub CLI** (`gh`), **gh-dash** (your PRs and issues dashboard), gitui, tig, delta, lazydocker |
+| FILES // NAVIGATION | Yazi, ranger, Midnight Commander, nnn, ncdu, fzf, glow, ripgrep, fd, bat, eza, zoxide |
+| SYSTEM // CONTROL | btop, htop, nmtui (Wi-Fi), pulsemixer, Zellij, tmux, glances, nvtop, powertop |
+| NET // COMMS | w3m, aerc, neomutt, newsboat, WeeChat, termshark, trippy, mtr, nethogs |
+| MEDIA // SYNTH | ncspot (Spotify), cmus, mpv, cava |
+| DATA // DEV TOOLS | Harlequin (SQL IDE), Posting (API client), VisiData, sc-im, HTTPie, pgcli |
+| PRODUCTIVITY · SIM // ARCADE | calcurse, Taskwarrior, tty-clock · cbonsai, bastet, nsnake, ninvaders, moon-buggy |
 
-## What's on screen
-
-- **SYSCORE:** total and per-core CPU (a heatmap on big CPUs), load history sparkline, load average, uptime
-- **MEMORY / STORAGE:** RAM, swap and cache, plus every real mounted volume
-- **BIOMON:** hardware temperatures and battery, if present
-- **NET UPLINK:** interface, IP, gateway, live RX/TX sparklines, totals
-- **NEURAL LINK:** an animated synapse waveform with an ECG spike, sync %, BPM, and a **TRACE** meter. When TRACE
-  climbs to 100%, Netwatch's trace attempt gets deflected and the screen glitches.
-- **PROCESSES:** the top processes by CPU, live
-- **CONSOLE // NETWATCH FEED:** command output, real alerts (CPU spikes, memory pressure, low battery, data surges,
-  full disks) and atmospheric chatter
-- A scrolling news ticker, a blinking `HIJACKED` status, a clock, and a hex DATASTREAM
-
-Effects include a CRT power-on and boot sequence (firmware check, intrusion alarm, the daemons breaking ICE, then the
-logo decoding out of noise), alternating scanline rows, random signal glitches, typed-out console lines, katakana
-data rain and a CRT power-off when you quit.
+You can type any program name directly. Terminal apps take over the screen and give it back when they exit, graphical
+apps open separately, and quick commands like `ls`, `git status` or `ping` stream their output into the console.
 
 ## Commands
 
-Type at the prompt. **Tab** completes commands, programs and paths, and **↑/↓** walks your history.
+**Tab** completes commands, programs, apps and paths. **↑/↓** walks your history.
 
 | Command | What it does |
 |---|---|
-| `apps [filter]` / **F2** | **Arsenal:** every installed program sorted into categories (see below). Arrow keys move, Enter launches, `/` searches everything. |
-| `run <prog> [args]` | Launches a program. GUI apps detach. Terminal programs (vim, htop, ssh…) take over the screen and give it back when they exit. |
-| `<anything>` | Any program name works directly. `firefox` opens Firefox, `htop` takes the screen, and `ls`, `git status` or `ping` stream their output into the console. |
-| `!<cmd>` / `exec <cmd>` | Forces a shell command into the console. Pipes, globs and `&&` all work. **Ctrl+C** kills it. |
-| `shell` / **F4** | Drops you into your real shell with a themed prompt. `exit` (or `deck`) brings you back. |
-| `spawn <cmd>` | Runs any command detached in the background |
-| `open <path\|url>` | Opens with the default app (`xdg-open`) |
-| `cd <dir>` | Changes the deck's working directory (shown in the prompt) |
-| `procs` / **F3** | Process manager: sort, filter, `k` sends SIGTERM, `K` sends SIGKILL |
-| `kill <pid\|name>` | Terminates a process |
-| `scan` / **F5** | Recon: interfaces, ARP neighbours, listening ports, established links |
-| `sysinfo` / **F7** | Hardware and identity dossier |
-| `theme [name]` / **F9** | Switches the skin (F9 cycles through them) |
-| `fx [on\|off\|scan\|boot]` | Toggles effects, scanlines or the boot sequence |
-| `rain` / **F6** | Data-rain screensaver |
-| `memo <text>` / `shards` | Writes and reads quick notes ("data shards") |
-| `update` | `sudo apt update && sudo apt full-upgrade` |
-| `lock` · `suspend` · `reboot` · `poweroff` | Session and power control. Suspend, reboot and power-off ask for confirmation. |
-| `history` · `clear` · `glitch` · `help` (**F1**) | |
-| `quit` / **F10** / **Ctrl+D** | Jacks out |
+| `apps` / **F2** · `get <app>` | browse and launch everything · install from the catalog |
+| `run <prog>` · `spawn <cmd>` · `!<cmd>` | launch (foreground) · launch detached · run a shell command into the console |
+| `shell` / **F4** | your real shell with a themed prompt. `exit` comes back |
+| `pin` · `unpin` | manage the dock (Alt+1-9) |
+| `settings` / **F8** · `theme` / **F9** · `color` · `font` · `fonts` · `panel` · `relaunch` | customization |
+| `wifi` · `audio` · `bright <n>` | network settings, volume mixer, screen brightness |
+| `procs` / **F3** · `kill <pid\|name>` | process manager (sort, filter, kill) |
+| `scan` / **F5** · `sysinfo` / **F7** | network recon · hardware and identity dossier |
+| `open <path\|url>` · `cd <dir>` | default-app open · change the deck's working directory |
+| `memo` · `shards` · `history` · `clear` · `rain` (**F6**) · `glitch` | notes, history, screensaver, effects |
+| `update` · `lock` · `suspend` · `reboot` · `poweroff` · `logout` | system and power control (with confirmations) |
+| `quit` / **F10** | jack out (in the NETDECK session: log out) |
 
-Other keys: **PgUp/PgDn** scroll the console, **Ctrl+L** clears it, **Ctrl+U/W** edit the input line.
-
-### Arsenal categories
-
-The deck reads every `.desktop` launcher (system, `~/.local`, snap and flatpak) and sorts it:
-
-`ICEBREAKERS` (security) · `CODE FORGE` (development) · `NET UPLINK` (internet) · `MEDIA SYNTH` (audio/video) ·
-`VISUAL CORTEX` (graphics) · `CORPO SUITE` (office) · `SIM ARCADE` (games) · `DATA LAB` (science/education) ·
-`SYS CORE` (system) · `CONFIG MATRIX` (settings) · `UTILITIES` · `UNSORTED`
-
-It also groups the command-line tools you have installed into `TERM // EDITORS`, `NETRUN`, `MONITOR`, `FILES`,
-`FORGE`, `SYSTEM` and `FUN`, and lists every executable on your `$PATH` under `PATH // ALL`.
-
-## For the full effect
-
-- Use a 256-color terminal such as GNOME Terminal, Kitty, Alacritty or WezTerm, at least 120×36. It works down to 80×24.
-- Set the terminal background to near-black (`#0d0d10`) and use a monospace font such as *JetBrains Mono*,
-  *Fira Code* or *Share Tech Mono*.
-- Install with `--login` so the laptop boots straight into the deck. Ptyxis and WezTerm have no fullscreen
-  launch option, so press F11 once there.
-
-Settings are saved in `~/.config/netdeck/config.json`, notes in `~/.local/share/netdeck/shards.log`.
+Other keys: **PgUp/PgDn** scroll the console, **Ctrl+C** kills a running command, **Ctrl+L** clears the console.

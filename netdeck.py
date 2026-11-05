@@ -45,7 +45,21 @@ CONF_FILE = os.path.join(CONF_DIR, "config.json")
 HIST_FILE = os.path.join(DATA_DIR, "history")
 SHARDS_FILE = os.path.join(DATA_DIR, "shards.log")
 
-DEFAULT_CONF = {"theme": "netrunner", "fx": True, "scan": True, "boot": True}
+DEFAULT_LAYOUT = {"left": ["sys", "mem", "disk", "net", "bio", "procs"], "right": ["dock", "console"]}
+DEFAULT_CONF = {
+    "theme": "netrunner",     # built-in or a name from "themes"
+    "fx": True,               # glitches, flicker, typing effect
+    "scan": True,             # alternating scanline rows
+    "boot": True,             # boot sequence on start
+    "ticker": True,           # scrolling news ticker
+    "neural": True,           # small neural-link readout in the top bar
+    "font": "JetBrains Mono", # applied by netdeck-session (foot / kitty / alacritty)
+    "font_size": 13,
+    "layout": DEFAULT_LAYOUT,
+    "dock": None,             # pinned commands; None = auto-pick from what is installed
+    "overrides": {},          # per-theme color tweaks: {"netrunner": {"pri": "#ff2a6d"}}
+    "themes": {},             # custom themes: {"mine": {"base": "netrunner", "pri": 198, ...}}
+}
 
 # --------------------------------------------------------------------------------------------
 #  Look & feel
@@ -130,63 +144,184 @@ APP_CATS = [
     ("UTILITIES", "accessories", {"Utility", "Accessories", "TextEditor", "Archiving", "Calculator", "Clock"}),
 ]
 
-TERM_TOOLS = [
-    ("TERM // EDITORS", "terminal text editors",
-     "nano vim nvim vi emacs micro hx helix kak joe ne mcedit"),
-    ("TERM // NETRUN", "network recon & comms",
-     "ssh mosh curl wget ping traceroute tracepath mtr nmap nc ncat netcat dig nslookup host whois iftop "
-     "nethogs bmon ss netstat ip iw nmcli nmtui tcpdump tshark termshark rsync scp sftp telnet ftp "
-     "aria2c speedtest-cli w3m lynx links irssi weechat"),
-    ("TERM // MONITOR", "process & hardware monitors",
-     "htop btop bpytop top atop glances iotop nvtop powertop free vmstat iostat dstat lsof strace "
-     "sensors watch journalctl dmesg"),
-    ("TERM // FILES", "file operations & search",
-     "ranger mc nnn lf vifm yazi broot tree fzf ncdu duf fd fdfind rg ag bat batcat exa eza lsd zip unzip "
-     "tar 7z unrar rclone"),
-    ("TERM // FORGE", "dev toolchain",
-     "git lazygit tig gh python3 ipython3 node npm deno bun cargo rustc go gcc g++ clang make cmake "
-     "docker podman kubectl java gdb tmux screen sqlite3 psql mysql redis-cli jq"),
-    ("TERM // SYSTEM", "packages & system control",
-     "apt apt-get dpkg snap flatpak systemctl sudo ufw neofetch fastfetch lsblk lscpu lsusb lspci "
-     "inxi hostnamectl timedatectl loginctl"),
-    ("TERM // FUN", "toys & eye candy",
-     "cmatrix cowsay fortune sl figlet toilet lolcat asciiquarium pipes.sh hollywood espeak "
-     "cava mpv ncmpcpp cmus"),
-]
+# --------------------------------------------------------------------------------------------
+#  Terminal software catalog ("the black market")
+#  Installed entries are launchable; missing ones can be installed from the arsenal (key i).
+#  inst: space-separated methods tried in order - apt:<pkg>  snap:<pkg>[/classic]  pipx:<pkg>
+#        cargo:<crate>  gh:<owner/extension>  sh:<SCRIPTS key>
+# --------------------------------------------------------------------------------------------
 
-TOOL_DESC = {
-    "nano": "simple editor", "vim": "modal editor", "nvim": "neovim", "vi": "classic modal editor",
-    "emacs": "the extensible editor", "micro": "modern terminal editor", "hx": "helix editor",
-    "helix": "helix editor", "ssh": "secure shell uplink", "mosh": "mobile shell", "curl": "transfer URLs",
-    "wget": "download files", "ping": "ICMP echo probe", "traceroute": "trace packet route",
-    "tracepath": "trace path / MTU", "mtr": "live traceroute", "nmap": "port & host scanner",
-    "nc": "netcat - raw sockets", "ncat": "netcat (nmap)", "dig": "DNS query", "nslookup": "DNS query",
-    "host": "DNS lookup", "whois": "domain registry lookup", "iftop": "bandwidth by connection",
-    "nethogs": "bandwidth by process", "bmon": "bandwidth monitor", "ss": "socket stats", "netstat": "socket stats",
-    "ip": "routing / interfaces", "iw": "wireless config", "nmcli": "NetworkManager CLI",
-    "nmtui": "NetworkManager TUI", "tcpdump": "packet sniffer", "tshark": "wireshark CLI",
-    "rsync": "sync files", "scp": "secure copy", "sftp": "secure FTP", "htop": "process viewer",
-    "btop": "resource monitor", "top": "process table", "atop": "advanced monitor", "glances": "system overview",
-    "iotop": "disk I/O by process", "nvtop": "GPU monitor", "powertop": "power consumption", "free": "memory usage",
-    "vmstat": "virtual memory stats", "lsof": "open files", "strace": "syscall tracer", "sensors": "hardware temps",
-    "watch": "repeat a command", "journalctl": "system logs", "dmesg": "kernel ring buffer",
-    "ranger": "file manager (vim keys)", "mc": "midnight commander", "nnn": "tiny file manager",
-    "lf": "list files manager", "yazi": "async file manager", "tree": "directory tree", "fzf": "fuzzy finder",
-    "ncdu": "disk usage explorer", "duf": "disk usage", "fd": "fast find", "fdfind": "fast find",
-    "rg": "ripgrep search", "bat": "cat with wings", "batcat": "cat with wings", "eza": "modern ls",
-    "exa": "modern ls", "lsd": "LSDeluxe ls", "git": "version control", "lazygit": "git TUI", "tig": "git TUI",
-    "gh": "GitHub CLI", "python3": "python REPL", "node": "javascript runtime", "docker": "containers",
-    "podman": "containers", "kubectl": "kubernetes", "gdb": "debugger", "tmux": "terminal multiplexer",
-    "screen": "terminal multiplexer", "jq": "JSON processor", "sqlite3": "SQLite shell", "apt": "package manager",
-    "snap": "snap packages", "flatpak": "flatpak packages", "systemctl": "service control", "ufw": "firewall",
-    "neofetch": "system info art", "fastfetch": "system info art", "lsblk": "block devices", "lscpu": "CPU info",
-    "lsusb": "USB devices", "lspci": "PCI devices", "cmatrix": "digital rain", "cowsay": "talking cow",
-    "fortune": "random wisdom", "sl": "steam locomotive", "figlet": "big letters", "lolcat": "rainbow text",
-    "cava": "audio visualizer", "mpv": "media player", "cmus": "music player", "w3m": "text web browser",
-    "lynx": "text web browser", "weechat": "chat client", "irssi": "IRC client", "tar": "archives",
-    "unzip": "extract zip", "7z": "7-zip", "rclone": "cloud sync", "cargo": "rust build tool", "go": "go toolchain",
-    "make": "build automation", "npm": "node packages", "sudo": "run as root", "aria2c": "download accelerator",
+
+def T(bins, desc, inst="", name=None, argv=None, cli=False, check=None):
+    bins = bins.split("|")
+    return dict(bins=bins, name=name or bins[0], desc=desc, inst=inst, argv=argv, cli=cli, check=check)
+
+
+SCRIPTS = {
+    "lazygit": (
+        'ARCH=$(uname -m); [ "$ARCH" = aarch64 ] && ARCH=arm64; '
+        'V=$(curl -fsSL https://api.github.com/repos/jesseduffield/lazygit/releases/latest '
+        '| grep -Po \'"tag_name": *"v\\K[^"]*\') && '
+        'curl -fLo /tmp/lazygit.tar.gz "https://github.com/jesseduffield/lazygit/releases/download/v${V}/'
+        'lazygit_${V}_Linux_${ARCH}.tar.gz" && tar xf /tmp/lazygit.tar.gz -C /tmp lazygit && '
+        'sudo install /tmp/lazygit -D -t /usr/local/bin/'),
+    "lazydocker": "curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/"
+                  "install_update_linux.sh | bash",
+    "claude": "curl -fsSL https://claude.ai/install.sh | bash",
+    "npm-codex": "(command -v npm >/dev/null || sudo apt install -y npm) && sudo npm install -g @openai/codex",
+    "npm-gemini": "(command -v npm >/dev/null || sudo apt install -y npm) && sudo npm install -g @google/gemini-cli",
+    "lazyvim": (
+        'if [ -e "$HOME/.config/nvim" ]; then echo "~/.config/nvim already exists - back it up first: '
+        'mv ~/.config/nvim ~/.config/nvim.bak"; exit 1; fi; '
+        'sudo snap install nvim --classic && git clone --depth 1 https://github.com/LazyVim/starter "$HOME/.config/nvim" '
+        '&& rm -rf "$HOME/.config/nvim/.git" && echo "LazyVim ready - the first launch downloads its plugins"'),
 }
+
+TUI_CATALOG = [
+    ("CODE // IDE & EDITORS", "terminal IDEs, editors, AI coding agents", [
+        T("nvim", "Neovim: the hackable editor, a full IDE with plugins", "apt:neovim snap:nvim/classic",
+          name="Neovim"),
+        T("lazyvim", "Neovim set up like VS Code: file tree, LSP, git, fuzzy finder", "sh:lazyvim", name="LazyVim",
+          argv=["nvim"], check="~/.config/nvim/lua/config/lazy.lua"),
+        T("hx|helix", "Helix: modern modal editor, language servers built in", "apt:helix snap:helix/classic",
+          name="Helix"),
+        T("micro", "Micro: easy editor with mouse, Ctrl+S, Ctrl+C - feels like a GUI", "apt:micro snap:micro/classic",
+          name="Micro"),
+        T("claude", "Claude Code: AI coding agent in your terminal", "sh:claude", name="Claude Code"),
+        T("codex", "Codex CLI: OpenAI coding agent", "sh:npm-codex", name="Codex CLI"),
+        T("gemini", "Gemini CLI: Google coding agent", "sh:npm-gemini", name="Gemini CLI"),
+        T("aider", "Aider: AI pair programming in your git repo", "pipx:aider-chat", name="Aider"),
+        T("vim", "Vim: the classic modal editor", "apt:vim", name="Vim"),
+        T("emacs", "Emacs (terminal build): the extensible editor", "apt:emacs-nox", name="Emacs"),
+        T("kak", "Kakoune: selection-first modal editor", "apt:kakoune", name="Kakoune"),
+        T("nano", "Nano: simple, always there", "apt:nano", name="Nano"),
+    ]),
+    ("GIT // GITHUB", "version control and GitHub", [
+        T("lazygit", "lazygit: the git client everyone loves - stage, commit, rebase with keys",
+          "apt:lazygit sh:lazygit", name="lazygit"),
+        T("gh", "GitHub CLI: PRs, issues, repos, actions  (try: gh pr list)", "apt:gh snap:gh", name="GitHub CLI",
+          cli=True),
+        T("gh-dash", "GitHub dashboard: your PRs and issues in a TUI", "gh:dlvhdr/gh-dash", name="gh-dash",
+          argv=["gh", "dash"], check="~/.local/share/gh/extensions/gh-dash"),
+        T("gitui", "gitui: blazing fast git TUI", "apt:gitui cargo:gitui", name="gitui"),
+        T("tig", "tig: browse git history and blame", "apt:tig", name="tig"),
+        T("delta", "delta: beautiful side-by-side git diffs", "apt:git-delta", name="delta", cli=True),
+        T("lazydocker", "lazydocker: manage containers like lazygit", "sh:lazydocker", name="lazydocker"),
+    ]),
+    ("FILES // NAVIGATION", "file managers, search, viewers", [
+        T("yazi", "Yazi: blazing fast file manager with image previews", "snap:yazi/classic", name="Yazi"),
+        T("ranger", "ranger: vim-keyed file manager", "apt:ranger", name="ranger"),
+        T("mc", "Midnight Commander: two-pane classic", "apt:mc", name="Midnight Commander"),
+        T("nnn", "nnn: tiny, ultra fast file manager", "apt:nnn", name="nnn"),
+        T("lf", "lf: terminal file manager", "apt:lf", name="lf"),
+        T("ncdu", "ncdu: find what eats your disk", "apt:ncdu", name="ncdu"),
+        T("fzf", "fzf: fuzzy-find anything", "apt:fzf", name="fzf"),
+        T("glow", "glow: render markdown in the terminal", "apt:glow snap:glow", name="glow"),
+        T("rg", "ripgrep: insanely fast grep", "apt:ripgrep", name="ripgrep", cli=True),
+        T("fdfind|fd", "fd: simple, fast find", "apt:fd-find", name="fd", cli=True),
+        T("batcat|bat", "bat: cat with syntax highlighting", "apt:bat", name="bat", cli=True),
+        T("eza", "eza: modern ls with colors and icons", "apt:eza", name="eza", cli=True),
+        T("zoxide", "zoxide: smarter cd that learns your habits", "apt:zoxide", name="zoxide", cli=True),
+        T("duf", "duf: pretty disk usage", "apt:duf", name="duf", cli=True),
+    ]),
+    ("SYSTEM // CONTROL", "monitors, network, audio, multiplexers", [
+        T("btop", "btop: gorgeous resource monitor", "apt:btop snap:btop", name="btop"),
+        T("htop", "htop: interactive process viewer", "apt:htop", name="htop"),
+        T("nmtui", "Wi-Fi & network settings", "apt:network-manager", name="nmtui (Wi-Fi)"),
+        T("pulsemixer", "volume control for PulseAudio / PipeWire", "apt:pulsemixer", name="pulsemixer"),
+        T("alsamixer", "ALSA sound mixer", "apt:alsa-utils", name="alsamixer"),
+        T("zellij", "Zellij: friendly terminal workspace / multiplexer", "snap:zellij/classic", name="Zellij"),
+        T("tmux", "tmux: terminal multiplexer", "apt:tmux", name="tmux"),
+        T("glances", "glances: everything-at-a-glance monitor", "apt:glances", name="glances"),
+        T("nvtop", "nvtop: GPU monitor", "apt:nvtop", name="nvtop"),
+        T("btm", "bottom: graphical process monitor", "cargo:bottom", name="bottom"),
+        T("s-tui", "s-tui: CPU frequency, temp and stress", "apt:s-tui", name="s-tui"),
+        T("iotop", "iotop: disk I/O per process", "apt:iotop", name="iotop"),
+        T("powertop", "powertop: battery drain hunter", "apt:powertop", name="powertop"),
+        T("fastfetch", "fastfetch: system info with ASCII art", "apt:fastfetch", name="fastfetch", cli=True),
+        T("neofetch", "neofetch: system info with ASCII art", "apt:neofetch", name="neofetch", cli=True),
+        T("lynis", "lynis: security audit of this machine", "apt:lynis", name="lynis", cli=True),
+    ]),
+    ("NET // COMMS", "browsing, mail, chat, recon", [
+        T("w3m", "w3m: text-mode web browser", "apt:w3m", name="w3m"),
+        T("lynx", "lynx: classic text browser", "apt:lynx", name="lynx"),
+        T("aerc", "aerc: modern email client", "apt:aerc", name="aerc"),
+        T("neomutt", "neomutt: power-user email", "apt:neomutt", name="neomutt"),
+        T("newsboat", "newsboat: RSS/Atom reader", "apt:newsboat", name="newsboat"),
+        T("weechat", "WeeChat: IRC / Matrix chat", "apt:weechat", name="WeeChat"),
+        T("irssi", "irssi: IRC client", "apt:irssi", name="irssi"),
+        T("termshark", "termshark: Wireshark in the terminal", "apt:termshark", name="termshark"),
+        T("trip", "trippy: traceroute meets ping, live", "snap:trippy", name="trippy"),
+        T("mtr", "mtr: live route + latency", "apt:mtr-tiny", name="mtr"),
+        T("nethogs", "nethogs: bandwidth per process", "apt:nethogs", name="nethogs"),
+        T("iftop", "iftop: bandwidth per connection", "apt:iftop", name="iftop"),
+        T("bmon", "bmon: interface bandwidth graphs", "apt:bmon", name="bmon"),
+        T("nmap", "nmap: network scanner (your own network)", "apt:nmap", name="nmap", cli=True),
+        T("speedtest-cli", "internet speed test", "apt:speedtest-cli", name="speedtest", cli=True),
+        T("rtorrent", "rTorrent: BitTorrent client", "apt:rtorrent", name="rTorrent"),
+        T("aria2c", "aria2: download accelerator", "apt:aria2", name="aria2", cli=True),
+    ]),
+    ("MEDIA // SYNTH", "music, video, visuals", [
+        T("ncspot", "ncspot: Spotify client (premium)", "snap:ncspot", name="ncspot"),
+        T("cmus", "cmus: music player for local files", "apt:cmus", name="cmus"),
+        T("mpv", "mpv: plays anything", "apt:mpv", name="mpv"),
+        T("cava", "cava: audio spectrum visualizer", "apt:cava", name="cava"),
+        T("ncmpcpp", "ncmpcpp: MPD music client", "apt:ncmpcpp", name="ncmpcpp"),
+        T("yt-dlp", "yt-dlp: download video / audio", "apt:yt-dlp", name="yt-dlp", cli=True),
+    ]),
+    ("DATA // DEV TOOLS", "databases, APIs, spreadsheets, REPLs", [
+        T("harlequin", "Harlequin: SQL IDE in the terminal", "pipx:harlequin", name="Harlequin"),
+        T("posting", "Posting: API client (Postman for the terminal)", "pipx:posting", name="Posting"),
+        T("vd", "VisiData: explore CSV, JSON, Excel, SQLite", "apt:visidata", name="VisiData"),
+        T("sc-im", "sc-im: spreadsheet calculator", "apt:sc-im", name="sc-im"),
+        T("http", "HTTPie: friendly HTTP requests", "apt:httpie", name="HTTPie", cli=True),
+        T("jq", "jq: slice and filter JSON", "apt:jq", name="jq", cli=True),
+        T("ipython3", "IPython: better Python REPL", "apt:ipython3", name="IPython"),
+        T("bpython", "bpython: fancy Python REPL", "apt:bpython", name="bpython"),
+        T("litecli", "litecli: SQLite with autocomplete", "apt:litecli", name="litecli"),
+        T("pgcli", "pgcli: Postgres with autocomplete", "apt:pgcli", name="pgcli"),
+        T("mycli", "mycli: MySQL with autocomplete", "apt:mycli", name="mycli"),
+    ]),
+    ("PRODUCTIVITY", "calendar, tasks, notes, time", [
+        T("calcurse", "calcurse: calendar and todo", "apt:calcurse", name="calcurse"),
+        T("task", "Taskwarrior: task manager", "apt:taskwarrior", name="Taskwarrior", cli=True),
+        T("khal", "khal: CalDAV calendar", "apt:khal", name="khal"),
+        T("tty-clock", "tty-clock: big terminal clock  (try: tty-clock -c)", "apt:tty-clock", name="tty-clock"),
+        T("bc", "bc: calculator", "apt:bc", name="bc"),
+    ]),
+    ("SIM // ARCADE", "games and eye candy", [
+        T("cbonsai", "cbonsai: grow a bonsai  (try: cbonsai -l)", "apt:cbonsai", name="cbonsai"),
+        T("cmatrix", "cmatrix: digital rain", "apt:cmatrix", name="cmatrix"),
+        T("asciiquarium", "asciiquarium: an aquarium", "apt:asciiquarium", name="asciiquarium"),
+        T("bastet", "bastet: tetris that hates you", "apt:bastet", name="bastet"),
+        T("nsnake", "nsnake: snake", "apt:nsnake", name="nsnake"),
+        T("ninvaders", "ninvaders: space invaders", "apt:ninvaders", name="ninvaders"),
+        T("moon-buggy", "moon-buggy: drive across the moon", "apt:moon-buggy", name="moon-buggy"),
+        T("greed", "greed: eat the numbers", "apt:greed", name="greed"),
+        T("hollywood", "hollywood: look extremely busy", "apt:hollywood", name="hollywood"),
+        T("sl", "sl: steam locomotive", "apt:sl", name="sl"),
+        T("figlet", "figlet: big ASCII letters", "apt:figlet", name="figlet", cli=True),
+        T("lolcat", "lolcat: rainbow everything", "apt:lolcat", name="lolcat", cli=True),
+        T("cowsay", "cowsay: a talking cow", "apt:cowsay", name="cowsay", cli=True),
+        T("fortune", "fortune: random wisdom", "apt:fortune-mod", name="fortune", cli=True),
+    ]),
+    ("CLI KIT", "classic command-line tools you already have", [
+        T(b, d, cli=True) for b, d in [
+            ("ssh", "secure shell uplink"), ("curl", "transfer URLs"), ("wget", "download files"),
+            ("ping", "ICMP echo probe"), ("traceroute", "trace packet route"), ("dig", "DNS query"),
+            ("whois", "domain lookup"), ("nc", "netcat - raw sockets"), ("ss", "socket stats"),
+            ("ip", "routing / interfaces"), ("nmcli", "NetworkManager CLI"), ("rsync", "sync files"),
+            ("scp", "secure copy"), ("git", "version control"), ("python3", "python"), ("node", "javascript"),
+            ("docker", "containers"), ("podman", "containers"), ("make", "build automation"),
+            ("gcc", "C compiler"), ("cargo", "rust toolchain"), ("go", "go toolchain"), ("sqlite3", "SQLite shell"),
+            ("lsof", "open files"), ("strace", "syscall tracer"), ("free", "memory usage"),
+            ("lsblk", "block devices"), ("lscpu", "CPU info"), ("lsusb", "USB devices"), ("lspci", "PCI devices"),
+            ("sensors", "hardware temps"), ("journalctl", "system logs"), ("dmesg", "kernel log"),
+            ("systemctl", "services"), ("ufw", "firewall"), ("tree", "directory tree"), ("tar", "archives"),
+            ("unzip", "extract zip"), ("7z", "7-zip"), ("rclone", "cloud sync"), ("brightnessctl", "screen brightness"),
+        ]
+    ]),
+]
 
 # Programs that need the real terminal (they take over the screen or ask for input)
 INTERACTIVE = set(
@@ -195,9 +330,54 @@ INTERACTIVE = set(
     "mysql psql sqlite3 redis-cli python python3 ipython ipython3 node irb ghci lua bash zsh fish sh dash su sudo "
     "passwd nmtui alsamixer pulsemixer cmatrix asciiquarium pipes.sh hollywood sl cava ncmpcpp cmus mpv w3m lynx "
     "links irssi weechat iftop nethogs bmon mtr watch apt apt-get aptitude dpkg-reconfigure cfdisk fdisk parted "
-    "gdb termshark tshark journalctl visudo crontab mutt neomutt newsboat calcurse bc".split()
+    "gdb termshark tshark journalctl visudo crontab mutt neomutt newsboat calcurse bc gitui lazydocker zellij "
+    "btm s-tui trip claude codex gemini aider aerc ncspot vd visidata sc-im harlequin posting bpython litecli "
+    "pgcli mycli khal tty-clock cbonsai bastet nsnake ninvaders moon-buggy greed rtorrent glow k9s".split()
 )
+INTERACTIVE_PREFIX = ("gh dash", "gh auth login", "gh repo create", "git commit", "git rebase -i", "git add -p",
+                      "docker run -it", "docker exec -it", "sudo ")
 REPL_ONLY = set("python python3 ipython ipython3 node irb ghci lua bc sqlite3".split())
+
+
+def install_script(spec, name):
+    """Build a bash snippet that tries each install method in order."""
+    branches = []
+    for tok in spec.split():
+        method, _, arg = tok.partition(":")
+        if method == "apt":
+            branches.append((f"apt-cache show {arg} >/dev/null 2>&1", f"sudo apt install -y {arg}"))
+        elif method == "snap":
+            pkg, _, opt = arg.partition("/")
+            classic = " --classic" if opt == "classic" else ""
+            branches.append((f"command -v snap >/dev/null && snap info {pkg} >/dev/null 2>&1",
+                             f"sudo snap install {pkg}{classic}"))
+        elif method == "pipx":
+            branches.append(("true", f"(command -v pipx >/dev/null || sudo apt install -y pipx) && "
+                                     f"pipx install {arg} && pipx ensurepath >/dev/null"))
+        elif method == "cargo":
+            branches.append(("command -v cargo >/dev/null", f"cargo install --locked {arg}"))
+        elif method == "gh":
+            branches.append(("true", "(command -v gh >/dev/null || sudo apt install -y gh) && "
+                                     "(gh auth status >/dev/null 2>&1 || gh auth login) && "
+                                     f"gh extension install {arg}"))
+        elif method == "sh" and arg in SCRIPTS:
+            branches.append(("true", SCRIPTS[arg]))
+    if not branches:
+        return None
+    lines = []
+    for i, (cond, cmd) in enumerate(branches):
+        lines.append(f"{'if' if i == 0 else 'elif'} {cond}; then {cmd}")
+    lines.append(f"else echo 'no install method for {name} works on this system - see its website'; exit 1")
+    lines.append("fi")
+    return "\n".join(lines)
+
+
+def install_summary(spec):
+    out = []
+    for tok in spec.split():
+        method, _, arg = tok.partition(":")
+        out.append({"sh": "official installer", "gh": f"gh extension {arg}"}.get(method, f"{method} {arg.split('/')[0]}"))
+    return " → ".join(out)
 
 # --------------------------------------------------------------------------------------------
 #  Helpers
@@ -238,15 +418,92 @@ def tilde(path):
 
 
 def load_conf():
-    conf = dict(DEFAULT_CONF)
+    conf = json.loads(json.dumps(DEFAULT_CONF))
     try:
         with open(CONF_FILE) as fh:
-            conf.update(json.load(fh))
+            user = json.load(fh)
+        if isinstance(user, dict):
+            conf.update(user)
     except (OSError, ValueError):
         pass
-    if conf.get("theme") not in THEMES:
+    lay = conf.get("layout")
+    if not isinstance(lay, dict) or not all(isinstance(lay.get(k), list) for k in ("left", "right")):
+        conf["layout"] = json.loads(json.dumps(DEFAULT_LAYOUT))
+    if conf.get("theme") not in all_themes(conf):
         conf["theme"] = "netrunner"
     return conf
+
+
+ROLES = [("pri", "frame & headers"), ("acc", "highlights"), ("hi", "hot text"), ("txt", "body text"),
+         ("dim", "labels & chrome"), ("deep", "empty bars & shadows"), ("bg", "background"),
+         ("bg2", "scanline rows"), ("ok", "status ok"), ("warn", "warning"), ("bad", "alert"),
+         ("mag", "second accent")]
+CUBE = [0, 95, 135, 175, 215, 255]
+BASE16 = ["000000", "800000", "008000", "808000", "000080", "800080", "008080", "c0c0c0",
+          "808080", "ff0000", "00ff00", "ffff00", "0000ff", "ff00ff", "00ffff", "ffffff"]
+
+
+def c256_to_hex(n):
+    n = int(n)
+    if n < 16:
+        return "#" + BASE16[n]
+    if n >= 232:
+        v = 8 + 10 * (n - 232)
+        return f"#{v:02x}{v:02x}{v:02x}"
+    n -= 16
+    return f"#{CUBE[n // 36]:02x}{CUBE[(n // 6) % 6]:02x}{CUBE[n % 6]:02x}"
+
+
+def hex_to_256(h):
+    h = h.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(ch * 2 for ch in h)
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+    def q(v):
+        return 0 if v < 48 else (1 if v < 115 else (v - 35) // 40)
+
+    ci = 16 + 36 * q(r) + 6 * q(g) + q(b)
+    cr, cg, cb = CUBE[q(r)], CUBE[q(g)], CUBE[q(b)]
+    avg = (r + g + b) // 3
+    gi = 232 + max(0, min(23, (avg - 3) // 10))
+    gv = 8 + 10 * (gi - 232)
+    dc = (cr - r) ** 2 + (cg - g) ** 2 + (cb - b) ** 2
+    dg = (gv - r) ** 2 + (gv - g) ** 2 + (gv - b) ** 2
+    return gi if dg < dc else ci
+
+
+def color_val(v):
+    """Accept 0-255, "203" or "#ff5f5f" and return a 256-color index."""
+    if isinstance(v, int):
+        return max(0, min(255, v))
+    v = str(v).strip()
+    if v.startswith("#") or (len(v) in (3, 6) and not v.isdigit()):
+        return hex_to_256(v)
+    return max(0, min(255, int(v)))
+
+
+def all_themes(conf):
+    return list(THEMES) + [n for n in conf.get("themes", {}) if n not in THEMES]
+
+
+def resolve_theme(conf, name=None):
+    name = name or conf.get("theme", "netrunner")
+    custom = conf.get("themes", {}).get(name)
+    if isinstance(custom, dict):
+        cols = dict(THEMES.get(custom.get("base", "netrunner"), THEMES["netrunner"]))
+        src = custom
+    else:
+        cols = dict(THEMES.get(name, THEMES["netrunner"]))
+        src = {}
+    for d in (src, conf.get("overrides", {}).get(name, {})):
+        for k, v in d.items():
+            if k in cols:
+                try:
+                    cols[k] = color_val(v)
+                except (ValueError, TypeError):
+                    pass
+    return cols
 
 
 def save_conf(conf):
@@ -590,10 +847,11 @@ def cpu_model():
 
 
 class App:
-    __slots__ = ("name", "kind", "argv", "comment", "cats", "did", "terminal", "bin", "stem")
+    __slots__ = ("name", "kind", "argv", "comment", "cats", "did", "terminal", "bin", "stem", "inst", "key")
 
-    def __init__(self, name, kind, argv=None, comment="", cats=(), did="", terminal=False):
+    def __init__(self, name, kind, argv=None, comment="", cats=(), did="", terminal=False, inst="", key=""):
         self.name, self.kind, self.comment, self.cats, self.did = name, kind, comment, set(cats), did
+        self.inst, self.key = inst, key or name.lower()
         self.argv = argv or [name]
         self.terminal = terminal
         self.bin = bin_of(self.argv).lower()
@@ -641,7 +899,7 @@ def parse_desktop(path):
 class Catalog:
     def __init__(self):
         self.ready = False
-        self.desktop, self.bins, self.binset, self.cats = [], [], set(), []
+        self.desktop, self.bins, self.binset, self.cats, self.market = [], [], set(), [], []
 
     def app_dirs(self):
         data_home = os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share")
@@ -710,15 +968,35 @@ class Catalog:
         for title, desc, _ in APP_CATS + [("UNSORTED", "uncategorized programs", set())]:
             if buckets[title]:
                 cats.append((title, desc, sorted(buckets[title], key=lambda a: a.name.lower())))
-        for title, desc, names in TERM_TOOLS:
-            apps = [App(n, "tui" if n in INTERACTIVE else "bin", [n], TOOL_DESC.get(n, ""))
-                    for n in names.split() if n in bins]
+        market, descs = [], {}
+        for title, desc, entries in TUI_CATALOG:
+            apps = []
+            for e in entries:
+                found = next((b for b in e["bins"] if b in bins), None)
+                if e["check"]:
+                    found = e["bins"][0] if os.path.exists(os.path.expanduser(e["check"])) else None
+                for b in e["bins"]:
+                    descs[b] = e["desc"]
+                key = e["bins"][0]
+                if found:
+                    argv = list(e["argv"] or [found])
+                    if argv[0] == "nvim" and key == "lazyvim" and os.path.exists("/snap/bin/nvim"):
+                        argv[0] = "/snap/bin/nvim"
+                    app = App(e["name"], "bin" if e["cli"] else "tui", argv, e["desc"], inst=e["inst"], key=key)
+                elif e["inst"]:
+                    app = App(e["name"], "get", list(e["argv"] or [e["bins"][0]]), e["desc"], inst=e["inst"], key=key)
+                else:
+                    continue
+                apps.append(app)
+                if e["inst"]:
+                    market.append(app)
             if apps:
+                apps.sort(key=lambda a: a.kind == "get")
                 cats.append((title, desc, apps))
         allbins = sorted(bins, key=str.lower)
         cats.append(("PATH // ALL", "every executable on $PATH",
-                     [App(n, "tui" if n in INTERACTIVE else "bin", [n], TOOL_DESC.get(n, "")) for n in allbins]))
-        self.desktop, self.bins, self.binset, self.cats = desktop, allbins, bins, cats
+                     [App(n, "tui" if n in INTERACTIVE else "bin", [n], descs.get(n, "")) for n in allbins]))
+        self.desktop, self.bins, self.binset, self.cats, self.market = desktop, allbins, bins, cats, market
 
     def find(self, q):
         """Return (app, candidates). Exact match first, then unique substring match."""
@@ -759,20 +1037,25 @@ class Catalog:
 
 
 class Pal:
-    def __init__(self, theme, c256):
+    def __init__(self, conf, c256):
         self.c256 = c256
         self.cache = {}
         self.next = 1
-        self.set(theme)
+        self.set(conf)
 
-    def set(self, theme):
-        self.name = theme
-        self.t = THEMES[theme] if self.c256 else BASIC
+    def set(self, conf):
+        self.name = conf["theme"]
+        self.colors = resolve_theme(conf)
+        self.t = self.colors if self.c256 else BASIC
         self.cache.clear()
         self.next = 1
 
-    def __call__(self, fg, bg="bg", bold=False, rev=False):
-        key = (self.t[fg], self.t[bg])
+    def raw(self, fg, bg):
+        """Attribute for explicit 256-color indices (used by swatches)."""
+        return self(None, None, _key=(fg, bg))
+
+    def __call__(self, fg, bg="bg", bold=False, rev=False, _key=None):
+        key = _key or (self.t[fg], self.t[bg])
         pair = self.cache.get(key)
         if pair is None:
             if self.next < curses.COLOR_PAIRS - 1:
@@ -811,7 +1094,19 @@ COMMANDS = [
     ("kill", "<pid|name>", "terminate a process (SIGTERM)", ["flatline"]),
     ("scan", "", "recon: interfaces, neighbours, open ports, live links", ["recon"]),
     ("sysinfo", "", "hardware & identity dossier", ["whoami", "dossier"]),
-    ("theme", "[name]", "switch skin: " + ", ".join(THEMES), ["skin"]),
+    ("get", "<app>", "install a terminal app from the catalog (see apps)", ["install"]),
+    ("pin", "<command>", "pin a command to the dock (Alt+1-9 launches)", []),
+    ("unpin", "<n|command>", "remove a dock entry", []),
+    ("settings", "", "tune everything: theme, colors, fonts, effects, panels  (F8)", ["tune", "config"]),
+    ("theme", "[name|save <name>]", "switch skin, or save the current colors as a new theme", ["skin"]),
+    ("color", "[role value]", "set a color: color pri #ff2a6d   (roles: color)", ["colour"]),
+    ("font", "[family] [size]", "set the terminal font (applied by the NETDECK session)", []),
+    ("fonts", "", "list installed monospace fonts", []),
+    ("panel", "<name> [on|off]", "show/hide a dashboard panel", ["panels"]),
+    ("relaunch", "", "restart the terminal window to apply font changes", []),
+    ("wifi", "", "network & Wi-Fi settings (nmtui)", ["net"]),
+    ("audio", "", "volume mixer", ["volume", "vol"]),
+    ("bright", "<percent>", "screen brightness (brightnessctl)", ["brightness"]),
     ("fx", "[on|off|scan|boot]", "toggle effects, scanlines, boot sequence", []),
     ("glitch", "", "shake the signal", []),
     ("rain", "", "data rain screensaver", ["screensaver"]),
@@ -824,11 +1119,20 @@ COMMANDS = [
     ("suspend", "", "put the machine to sleep", []),
     ("reboot", "", "reboot the machine", []),
     ("poweroff", "", "shut the machine down", ["shutdown"]),
+    ("logout", "", "end the session (log out)", []),
     ("quit", "", "jack out", ["exit", "jackout", "q"]),
 ]
 
+PANELS = {  # name: title shown in settings
+    "sys": "SYSCORE  cpu", "mem": "MEMORY", "disk": "STORAGE", "net": "NET UPLINK", "bio": "BIOMON  temps/power",
+    "procs": "PROCESSES", "dock": "DOCK  pinned apps", "console": "CONSOLE", "neural": "NEURAL LINK  big panel",
+    "stream": "DATASTREAM  hex",
+}
+PANEL_HOME = {"sys": "left", "mem": "left", "disk": "left", "net": "left", "bio": "left", "procs": "left",
+              "stream": "left", "dock": "right", "neural": "right", "console": "right"}
+
 KEYBAR = [("F1", "CODEX"), ("F2", "ARSENAL"), ("F3", "PROCS"), ("F4", "SHELL"), ("F5", "RECON"),
-          ("F6", "RAIN"), ("F7", "DOSSIER"), ("F9", "SKIN"), ("F10", "JACK OUT")]
+          ("F6", "RAIN"), ("F7", "DOSSIER"), ("F8", "TUNE"), ("F9", "SKIN"), ("F10", "JACK OUT")]
 
 
 class Deck:
@@ -836,7 +1140,7 @@ class Deck:
         self.scr = scr
         self.args = args
         self.conf = load_conf()
-        if args.theme:
+        if args.theme and args.theme in all_themes(self.conf):
             self.conf["theme"] = args.theme
         if args.no_fx:
             self.conf["fx"] = False
@@ -852,7 +1156,7 @@ class Deck:
         self.c256 = curses.COLORS >= 256
         if not self.c256:
             self.conf["scan"] = False
-        self.pal = Pal(self.conf["theme"], self.c256)
+        self.pal = Pal(self.conf, self.c256)
         curses.raw()
         curses.noecho()
         scr.keypad(True)
@@ -894,6 +1198,9 @@ class Deck:
         self.catalog_announced = False
         self.running = True
         self.pending = None  # deferred action run outside the draw loop
+        self.kiosk = bool(os.environ.get("NETDECK_KIOSK"))
+        self.exit_code = 0
+        self.notes = deque()  # messages from background threads
 
     # ---------------------------------------------------------------- persistence
     def _load_history(self):
@@ -1085,6 +1392,8 @@ class Deck:
             self.draw_procs()
         elif self.mode == "help":
             self.draw_help()
+        elif self.mode == "settings":
+            self.draw_settings()
         if self.confirm:
             self.draw_confirm()
         if now < self.glitch_until:
@@ -1133,6 +1442,9 @@ class Deck:
         who = f" {self.user}@{self.host} "
         right_len = len(who) + len(date) + len(clock) + 2
         rx = W - right_len
+        x += len(st)
+        if self.conf.get("neural", True) and rx - x > 40:
+            self.draw_neural_mini(y, rx - 33, now)
         if rx > x + 2:
             self.put(y, rx, who, self.c("acc", y, True))
             self.put(y, rx + len(who), "▐", self.c("pri", y))
@@ -1143,6 +1455,9 @@ class Deck:
             self.put(y, W - len(clock), clock, self.inv("hi"))
         # ticker
         y = 1
+        if not self.conf.get("ticker", True):
+            self.put(y, 0, "◤◢" + "━" * (W - 3) + "◣", self.c("deep", y))
+            return
         st_ = self.stats
         mp = st_.mem["used"] / st_.mem["total"] * 100
         live = (f"CPU {st_.cpu:3.0f}%  MEM {mp:3.0f}%  NET ▼{fmt_rate(st_.rx):>10} ▲{fmt_rate(st_.tx):>10}  "
@@ -1158,54 +1473,138 @@ class Deck:
             self.put(y, 3 + i, view[i:i + len(live)], self.c("pri", y))
         self.put(y, W - 1, "◣", self.c("pri", y, True))
 
+    def draw_neural_mini(self, y, x, now):
+        """A small live neural-link readout: waveform, sync and trace."""
+        self.put(y, x, "◈", self.c("mag", y, True))
+        for i in range(8):
+            t = now * 3.2 + i * 0.7
+            v = 0.5 + 0.32 * math.sin(t) + 0.15 * math.sin(t * 2.3)
+            if int((now * 9) % 14) == i:
+                v = 1.0
+            self.put(y, x + 2 + i, SPARK[max(0, min(7, int(v * 7.99)))], self.c("acc", y))
+        sync = 97.0 + 2.5 * math.sin(now * 0.7)
+        self.put(y, x + 11, f"{sync:4.1f}%", self.c("txt", y))
+        tr = self.trace
+        role = "acc" if tr < 50 else ("hi" if tr < 80 else "bad")
+        self.put(y, x + 18, "TRACE", self.c("dim", y))
+        self.put(y, x + 24, f"{tr:3.0f}%", self.c(role, y, tr >= 80))
+
     # ---------------------------------------------------------------- body layout
     def draw_body(self, now):
         H, W = self.H, self.W
         top, bot = 2, H - 2
         bh = bot - top
-        lw = 36 if W >= 120 else (32 if W >= 96 else 30)
-        rw = W - lw
-        st = self.stats
+        lay = self.conf["layout"]
+        left = [p for p in lay.get("left", []) if p in PANELS]
+        right = [p for p in lay.get("right", []) if p in PANELS]
+        if not left and not right:
+            right = ["console"]
+        lw = 38 if W >= 150 else (36 if W >= 120 else (32 if W >= 96 else 30))
+        if not right:
+            lw = W
+        elif not left:
+            lw = 0
+        for names, x, w in ((left, 0, lw), (right, lw, W - lw)):
+            if not names or w < 20:
+                continue
+            y = top
+            for name, h in self.alloc(names, bh, w):
+                getattr(self, "draw_" + {"procs": "proc_panel"}.get(name, name))(y, x, h, w, now)
+                y += h
 
-        # ---- left column
-        n = len(st.cores)
-        iw = lw - 4
-        heatmap = n > 16
-        if heatmap:
-            per = max(1, iw // 2)
-            core_rows = math.ceil(n / per)
-        else:
-            cols = 2 if n > 1 else 1
-            core_rows = math.ceil(n / cols)
-        sys_h = 2 + 3 + core_rows
-        panels = [("sys", sys_h), ("mem", 5), ("disk", 2 + min(4, max(1, len(st.disks))))]
-        bio_lines = 3 + len(st.temps[:3]) + (1 if st.battery else 0)
-        panels.append(("bio", 2 + bio_lines))
-        y = top
-        for name, h in panels:
-            if y + h > bot:
+    def panel_size(self, name, w):
+        """(preferred height, grow weight) for a panel at a given width."""
+        st, iw = self.stats, w - 4
+        if name == "sys":
+            n = len(st.cores)
+            rows = math.ceil(n / max(1, iw // 2)) if n > 16 else math.ceil(n / (2 if n > 1 else 1))
+            return 5 + rows, 0
+        if name == "mem":
+            return 5, 0
+        if name == "disk":
+            return 2 + min(4, max(1, len(st.disks))), 0
+        if name == "net":
+            return 7, 0
+        if name == "bio":
+            return 5 + len(st.temps[:3]) + (1 if st.battery else 0), 0
+        if name == "procs":
+            return 8, 2
+        if name == "dock":
+            n = max(1, len(self.dock_items()))
+            return 2 + math.ceil(n / max(1, iw // 24)), 0
+        if name == "neural":
+            return 7, 0
+        if name == "stream":
+            return 6, 1
+        return 6, 5  # console
+
+    def alloc(self, names, avail, w):
+        out, used = [], 0
+        for n in names:
+            h, g = self.panel_size(n, w)
+            if used + h > avail:
+                h = 5 if g else h
+                if used + h > avail:
+                    continue
+            out.append([n, h, g])
+            used += h
+        extra = avail - used
+        if extra > 0 and out:
+            growers = [o for o in out if o[2]]
+            if not growers:
+                out[-1][1] += extra
+            else:
+                tot = sum(o[2] for o in growers)
+                given = 0
+                for o in growers:
+                    add = extra * o[2] // tot
+                    o[1] += add
+                    given += add
+                growers[-1][1] += extra - given
+        return [(n, h) for n, h, _g in out]
+
+    def dock_items(self):
+        items = self.conf.get("dock")
+        if items is None:
+            items = self.auto_dock()
+        return [i for i in items if isinstance(i, str) and i.strip()][:9]
+
+    def auto_dock(self):
+        if getattr(self, "_auto_dock", None) is not None:
+            return self._auto_dock
+        groups = [["nvim", "hx", "helix", "micro", "vim", "nano"], ["lazygit", "gitui", "tig"],
+                  ["claude", "codex"], ["btop", "htop", "top"], ["yazi", "ranger", "nnn", "mc"],
+                  ["firefox", "chromium", "google-chrome", "brave-browser"], ["nmtui"],
+                  ["pulsemixer", "alsamixer"], ["ncspot", "cmus"]]
+        picks = []
+        for g in groups:
+            hit = next((c for c in g if shutil.which(c)), None)
+            if hit:
+                picks.append(hit)
+        if os.path.exists(os.path.expanduser("~/.local/share/gh/extensions/gh-dash")):
+            picks.insert(2, "gh dash")
+        self._auto_dock = picks[:9]
+        return self._auto_dock
+
+    def draw_dock(self, y, x, h, w, now):
+        items = self.dock_items()
+        self.panel(y, x, h, w, "DOCK", "ALT+1-9 · pin / unpin", role="acc")
+        ix, iw = x + 2, w - 4
+        if not items:
+            self.put(y + 1, ix, "empty - pin something: pin nvim", self.c("deep", y + 1))
+            return
+        cell = 24
+        per = max(1, iw // cell)
+        for i, cmd in enumerate(items):
+            r = y + 1 + i // per
+            if r >= y + h - 1:
                 break
-            getattr(self, "draw_" + name)(y, 0, h, lw, now)
-            y += h
-        if bot - y >= 4:
-            self.draw_stream(y, 0, bot - y, lw, now)
-
-        # ---- right column
-        x = lw
-        top_h = 9 if bh >= 28 else 8
-        if rw >= 70:
-            nw = int(rw * 0.56)
-            self.draw_net(top, x, top_h, nw, now)
-            self.draw_neural(top, x + nw, top_h, rw - nw, now)
-        else:
-            self.draw_net(top, x, top_h, rw, now)
-        rest = bh - top_h
-        proc_h = max(5, min(12, int(rest * 0.42)))
-        if rest - proc_h < 6:
-            proc_h = max(0, rest - 6)
-        if proc_h >= 4:
-            self.draw_proc_panel(top + top_h, x, proc_h, rw)
-        self.draw_console(top + top_h + proc_h, x, rest - proc_h, rw, now)
+            cx = ix + (i % per) * cell
+            prog = cmd.split()[0]
+            ok = bool(shutil.which(prog)) or (self.catalog.ready and self.catalog.exact(cmd) is not None)
+            self.put(r, cx, f" {i + 1} ", self.inv("acc" if ok else "dim"))
+            label = cmd if len(cmd) <= cell - 6 else cmd[: cell - 7] + "…"
+            self.put(r, cx + 4, label, self.c("txt" if ok else "deep", r, ok))
 
     def draw_sys(self, y, x, h, w, now):
         st = self.stats
@@ -1392,26 +1791,36 @@ class Deck:
         self.bar(r, ix + 6, iw - 6 - len(num) - 1, tr, role)
         self.put(r, ix + iw - len(num), num, self.c(role, r, True))
 
-    def draw_proc_panel(self, y, x, h, w):
+    def draw_proc_panel(self, y, x, h, w, now=None):
         st = self.stats
-        self.panel(y, x, h, w, "PROCESSES", f"{st.nprocs} ACTIVE · F3")
         ix, iw = x + 2, w - 4
+        narrow = iw < 52
+        self.panel(y, x, h, w, "PROCESSES", f"{st.nprocs} · F3" if narrow else f"{st.nprocs} ACTIVE · F3")
         r = y + 1
         wide = iw >= 70
-        hdr = f"{'PID':>7} {'USER':<9} {'CPU%':>5} {'MEM%':>5}  " + ("LOAD      " if wide else "") + "PROCESS"
+        if narrow:
+            hdr = f"{'PID':>6} {'CPU%':>5} {'MEM%':>5} PROCESS"
+        else:
+            hdr = f"{'PID':>7} {'USER':<9} {'CPU%':>5} {'MEM%':>5}  " + ("LOAD      " if wide else "") + "PROCESS"
         self.put(r, ix, hdr[:iw], self.c("dim", r, True))
         for i, p in enumerate(st.procs[: h - 3]):
             r = y + 2 + i
             pid, user, cpu, memp, _rss, state, comm = p
             role = "bad" if cpu > 50 else ("hi" if cpu > 15 else "txt")
-            self.put(r, ix, f"{pid:>7}", self.c("dim", r))
-            self.put(r, ix + 8, f"{user[:9]:<9}", self.c("bad" if user == "root" else "acc", r))
-            self.put(r, ix + 18, f"{cpu:5.1f}", self.c(role, r, cpu > 15))
-            self.put(r, ix + 24, f"{memp:5.1f}", self.c("txt", r))
-            cx = ix + 31
-            if wide:
-                self.bar(r, cx, 8, min(100, cpu))
-                cx += 10
+            if narrow:
+                self.put(r, ix, f"{pid:>6}", self.c("dim", r))
+                self.put(r, ix + 7, f"{cpu:5.1f}", self.c(role, r, cpu > 15))
+                self.put(r, ix + 13, f"{memp:5.1f}", self.c("txt", r))
+                cx = ix + 19
+            else:
+                self.put(r, ix, f"{pid:>7}", self.c("dim", r))
+                self.put(r, ix + 8, f"{user[:9]:<9}", self.c("bad" if user == "root" else "acc", r))
+                self.put(r, ix + 18, f"{cpu:5.1f}", self.c(role, r, cpu > 15))
+                self.put(r, ix + 24, f"{memp:5.1f}", self.c("txt", r))
+                cx = ix + 31
+                if wide:
+                    self.bar(r, cx, 8, min(100, cpu))
+                    cx += 10
             self.put(r, cx, comm[: ix + iw - cx], self.c("hi" if i == 0 else "txt", r, i == 0))
 
     def draw_console(self, y, x, h, w, now):
@@ -1503,6 +1912,8 @@ class Deck:
         y = self.H - 1
         x = 0
         for k, lab in KEYBAR:
+            if k == "F10" and self.kiosk:
+                lab = "LOG OUT"
             need = len(k) + len(lab) + 3
             if x + need > self.W - 1:
                 break
@@ -1544,9 +1955,11 @@ class Deck:
         if not self.catalog.ready:
             return []
         f = self.ov.get("filter", "")
-        if f:
-            return [(f"SEARCH '{f}'", "matches across the arsenal", self.catalog.search(f))]
-        return self.catalog.cats
+        cats = [(f"SEARCH '{f}'", "matches across the arsenal", self.catalog.search(f))] if f else self.catalog.cats
+        if not self.conf.get("show_missing", True):
+            cats = [(t, d, [a for a in apps if a.kind != "get"]) for t, d, apps in cats]
+            cats = [c for c in cats if c[2] or c[0].startswith("SEARCH")]
+        return cats
 
     def draw_apps(self):
         y, x, h, w = self.box("ARSENAL // INSTALLED PROGRAMS",
@@ -1561,6 +1974,8 @@ class Deck:
         if not cats:
             return
         ov["cat"] = max(0, min(ov.get("cat", 0), len(cats) - 1))
+        hint = "m: hide not-installed" if self.conf.get("show_missing", True) else "m: show installable"
+        self.put(y + h - 1, x + 3, f" {hint} · i install ", self.c("dim", y + h - 1))
         lw = 30
         # filter line
         r = y + 1
@@ -1614,15 +2029,16 @@ class Deck:
             idx = top + i
             rr = alist_top + i
             sel = idx == ov["sel"] and ov.get("focus") == "apps"
-            kind = {"gui": "GUI", "tui": "TUI", "bin": "BIN"}[a.kind]
-            krole = {"gui": "acc", "tui": "hi", "bin": "dim"}[a.kind]
+            kind = {"gui": "GUI", "tui": "TUI", "bin": "BIN", "get": "GET"}[a.kind]
+            krole = {"gui": "acc", "tui": "hi", "bin": "dim", "get": "mag"}[a.kind]
             if sel:
                 self.put(rr, ax - 1, " " * (aw + 1), self.inv("acc"))
                 self.put(rr, ax, f"▶ {a.name[:nw - 2]:<{nw - 2}}", self.inv("acc"))
                 self.put(rr, ax + nw + 1, kind, self.inv("acc"))
                 self.put(rr, ax + nw + 5, a.comment[: aw - nw - 5], self.pal("bg", "acc", False))
             else:
-                self.put(rr, ax, f"  {a.name[:nw - 2]}", self.c("txt", rr, a.kind == "gui"))
+                self.put(rr, ax, f"  {a.name[:nw - 2]}", self.c("dim" if a.kind == "get" else "txt", rr,
+                                                               a.kind == "gui"))
                 self.put(rr, ax + nw + 1, kind, self.c(krole, rr))
                 self.put(rr, ax + nw + 5, a.comment[: aw - nw - 5], self.c("dim", rr))
         if len(apps) > alist_h:
@@ -1635,9 +2051,10 @@ class Deck:
         self.put(r - 1, x + 1, "─" * (w - 2), self.c("deep", r - 1))
         if apps:
             a = apps[ov["sel"]]
-            how = {"gui": "detached GUI", "tui": "takes the terminal", "bin": "output streams to console"}[a.kind]
-            self.put(r, x + 2, "EXEC ▸ ", self.c("dim", r))
-            cmd = " ".join(a.argv)
+            how = {"gui": "detached GUI", "tui": "takes the terminal", "bin": "output streams to console",
+                   "get": "not installed · ENTER / i to install"}[a.kind]
+            self.put(r, x + 2, "EXEC ▸ " if a.kind != "get" else "GET  ▸ ", self.c("dim", r))
+            cmd = " ".join(a.argv) if a.kind != "get" else install_summary(a.inst)
             self.put(r, x + 9, cmd[: w - 14 - len(how)], self.c("hi", r))
             self.put(r, x + w - len(how) - 3, how, self.c("dim", r))
 
@@ -1671,9 +2088,22 @@ class Deck:
             ov["typing"] = True
             ov["filter"] = ""
             return
+        if k == "m":
+            self.conf["show_missing"] = not self.conf.get("show_missing", True)
+            save_conf(self.conf)
+            ov["sel"] = ov["top"] = 0
+            return
         if not cats:
             return
         focus = ov.get("focus", "cats")
+        if k == "i" and focus == "apps":
+            apps = cats[ov.get("cat", 0)][2]
+            if apps:
+                a = apps[max(0, min(ov.get("sel", 0), len(apps) - 1))]
+                if a.inst:
+                    self.mode = "main"
+                    self.install_app(a)
+            return
         if k in ("\t", curses.KEY_RIGHT, "l") and focus == "cats":
             ov["focus"] = "apps"
         elif k in ("\t", curses.KEY_LEFT, "h", curses.KEY_BTAB) and focus == "apps":
@@ -1706,7 +2136,10 @@ class Deck:
             if apps:
                 a = apps[max(0, min(ov.get("sel", 0), len(apps) - 1))]
                 self.mode = "main"
-                self.launch_app(a)
+                if a.kind == "get":
+                    self.install_app(a)
+                else:
+                    self.launch_app(a)
 
     # -- procs
     def proc_list(self):
@@ -1821,7 +2254,8 @@ class Deck:
         lines.append([("  !<cmd>      ", "acc"), ("force a shell command into the console - pipes, globs, && all work", "txt")])
         lines.append([])
         lines.append([("KEYS", "pri")])
-        keys = [("F1-F10", "see the bar at the bottom"), ("TAB", "complete commands, programs, paths"),
+        keys = [("F1-F10", "see the bar at the bottom"), ("ALT+1 … ALT+9", "launch dock slot"),
+                ("TAB", "complete commands, programs, paths"),
                 ("↑ / ↓", "command history"), ("PGUP / PGDN", "scroll the console"),
                 ("CTRL+C", "kill running job / clear input"), ("CTRL+L", "clear console"),
                 ("CTRL+U / CTRL+W", "clear line / delete word"), ("CTRL+D", "jack out (on empty line)")]
@@ -1850,6 +2284,245 @@ class Deck:
             self.ov["off"] = max(0, self.ov.get("off", 0) - 10)
         else:
             self.mode = "main"
+
+    # -- settings (F8)
+    def mono_fonts(self):
+        if getattr(self, "_fonts", None) is None:
+            fonts = set()
+            if shutil.which("fc-list"):
+                try:
+                    out = subprocess.run(["fc-list", ":spacing=mono", "family"], capture_output=True, text=True,
+                                         timeout=4).stdout
+                    for line in out.splitlines():
+                        f = line.split(",")[0].strip()
+                        if f:
+                            fonts.add(f)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            self._fonts = sorted(fonts, key=str.lower)
+        return self._fonts
+
+    def settings_rows(self):
+        rows = [("sec", "LOOK", ""), ("theme", "theme", "Theme")]
+        rows += [("color", r, lab) for r, lab in ROLES]
+        rows += [("sec", "TYPE", ""), ("font", "font", "Font family"), ("size", "font_size", "Font size")]
+        rows += [("sec", "EFFECTS", "")]
+        rows += [("bool", k, lab) for k, lab in (("fx", "Glitches & animations"), ("scan", "Scanline rows"),
+                                                 ("boot", "Boot sequence"), ("ticker", "News ticker"),
+                                                 ("neural", "Neural readout in top bar"))]
+        rows += [("sec", "PANELS", "")]
+        rows += [("panel", p, lab) for p, lab in PANELS.items()]
+        rows += [("sec", "ACTIONS", ""), ("act", "save", "Save colors as a new theme"),
+                 ("act", "reset", "Reset this theme's colors"), ("act", "relaunch", "Apply font now (relaunch)")]
+        return rows
+
+    def settings_value(self, row):
+        kind, key, _ = row
+        c = self.conf
+        if kind == "theme":
+            return c["theme"] + ("  (custom)" if c["theme"] not in THEMES else "")
+        if kind == "color":
+            n = self.pal.colors[key]
+            th = c["theme"]
+            mod = key in c.get("overrides", {}).get(th, {})
+            return f"{n:>3}  {c256_to_hex(n)}" + ("  *" if mod else "")
+        if kind == "font":
+            return c.get("font") or "(terminal default)"
+        if kind == "size":
+            return f"{c.get('font_size', 13)} pt"
+        if kind == "bool":
+            return "ON" if c.get(key, True) else "OFF"
+        if kind == "panel":
+            lay = c["layout"]
+            return "LEFT" if key in lay["left"] else ("RIGHT" if key in lay["right"] else "OFF")
+        return "↵"
+
+    def draw_settings(self):
+        y, x, h, w = self.box("TUNE // CUSTOMIZE THE DECK",
+                              "↑↓ select  ←→ change  ENTER edit/toggle  r reset color  ESC save & close", role="mag")
+        ov = self.ov
+        rows = self.settings_rows()
+        lw = min(66, w - 4)
+        lh = h - 3
+        sel = max(0, min(ov.get("sel", 1), len(rows) - 1))
+        top = ov.get("top", 0)
+        if sel < top:
+            top = max(0, sel - 1)
+        if sel >= top + lh:
+            top = sel - lh + 1
+        ov["top"] = top
+        for i, row in enumerate(rows[top:top + lh]):
+            r = y + 2 + i
+            kind, key, label = row
+            if kind == "sec":
+                self.put(r, x + 3, f"── {key} " + "─" * (lw - len(key) - 6), self.c("pri", r, True))
+                continue
+            is_sel = top + i == sel
+            val = self.settings_value(row)
+            if is_sel and ov.get("edit") is not None:
+                caret = "█" if int(self.now * 2.2) % 2 == 0 else " "
+                val = ov["edit"] + caret
+            if is_sel:
+                self.put(r, x + 3, " " * lw, self.inv("mag"))
+                self.put(r, x + 4, f"▶ {label}", self.inv("mag"))
+                self.put(r, x + 36, val[: lw - 38], self.inv("mag"))
+            else:
+                self.put(r, x + 6, label, self.c("txt", r))
+                role = {"ON": "ok", "OFF": "deep", "LEFT": "acc", "RIGHT": "acc"}.get(val, "hi")
+                self.put(r, x + 36, val[: lw - 38], self.c(role, r, role != "deep"))
+            if kind == "color":
+                self.put(r, x + 3 + lw - 5, "    ", self.pal.raw(self.pal.colors["txt"], self.pal.colors[key]))
+        # scrollbar
+        if len(rows) > lh:
+            frac = top / max(1, len(rows) - lh)
+            sy = y + 2 + int(frac * (lh - 1))
+            for rr in range(y + 2, y + 2 + lh):
+                self.put(rr, x + lw + 4, "┃" if rr == sy else "│", self.c("mag" if rr == sy else "deep", rr))
+        # live preview + help on the right
+        px = x + lw + 7
+        pw = w - lw - 10
+        if pw >= 28:
+            self.draw_settings_preview(y + 2, px, pw, rows[sel])
+
+    def draw_settings_preview(self, y, x, w, row):
+        kind, key, label = row
+        ph = 9
+        self.panel(y, x, ph, w, "PREVIEW", self.conf["theme"].upper())
+        ix, iw = x + 2, w - 4
+        self.put(y + 1, ix, "CPU", self.c("txt", y + 1, True))
+        self.bar(y + 1, ix + 4, iw - 10, 37)
+        self.put(y + 1, ix + iw - 5, " 37%", self.c("acc", y + 1, True))
+        self.put(y + 2, ix, "MEM", self.c("txt", y + 2, True))
+        self.bar(y + 2, ix + 4, iw - 10, 71)
+        self.put(y + 2, ix + iw - 5, " 71%", self.c("hi", y + 2, True))
+        self.spark(y + 3, ix, iw, [abs(math.sin(i * 0.4 + self.now)) * 100 for i in range(iw)], "pri", peak=100)
+        self.put(y + 4, ix, "body text ", self.c("txt", y + 4))
+        self.put(y + 4, ix + 10, "highlight ", self.c("acc", y + 4, True))
+        self.put(y + 4, ix + 20, "hot", self.c("hi", y + 4, True))
+        self.put(y + 5, ix, "✓ ok ", self.c("ok", y + 5, True))
+        self.put(y + 5, ix + 6, "▲ warn ", self.c("warn", y + 5, True))
+        self.put(y + 5, ix + 14, "✗ alert ", self.c("bad", y + 5, True))
+        self.put(y + 5, ix + 23, "◆ accent", self.c("mag", y + 5, True))
+        self.put(y + 6, ix, "labels and chrome", self.c("dim", y + 6))
+        self.put(y + 7, ix, f" {self.user}@{self.host} ", self.inv("pri"))
+        # palette strip for color rows
+        r = y + ph + 1
+        if kind == "color":
+            cur = self.pal.colors[key]
+            self.put(r, x, f"{label.upper()}  ·  ←→ step  ·  ENTER type #hex or 0-255", self.c("dim", r))
+            n = max(4, min(32, (w - 2) // 2))
+            start = max(0, min(256 - n, cur - n // 2))
+            for i in range(n):
+                v = start + i
+                self.put(r + 1, x + i * 2, "  ", self.pal.raw(self.pal.colors["txt"], v))
+                if v == cur:
+                    self.put(r + 2, x + i * 2, "▲▲", self.c("hi", r + 2, True))
+            return
+        tips = {
+            "theme": "←→ cycles built-in and custom themes. Save your tweaks with the action at the bottom.",
+            "font": "←→ cycles installed monospace fonts, ENTER types any name. The NETDECK session and app-menu "
+                    "launcher apply it (foot, kitty, alacritty). Use 'Apply font now' to see it.",
+            "size": "←→ changes the size. Applied on relaunch.",
+            "bool": "ENTER or ←→ toggles.",
+            "panel": "ENTER toggles the panel. Columns and order live in ~/.config/netdeck/config.json → layout.",
+            "act": "ENTER runs it.",
+        }
+        text = tips.get(kind, "")
+        for i, line in enumerate(self._wrap([(text, "dim")], w)):
+            self.put(r + i, x, "".join(t for t, _ in line), self.c("dim", r + i))
+
+    def settings_key(self, k):
+        ov = self.ov
+        rows = self.settings_rows()
+        sel = max(0, min(ov.get("sel", 1), len(rows) - 1))
+        row = rows[sel]
+        kind, key, _ = row
+        if ov.get("edit") is not None:
+            if k == "\x1b":
+                ov["edit"] = None
+            elif k in ("\n", "\r", curses.KEY_ENTER):
+                text, ov["edit"] = ov["edit"].strip(), None
+                self.settings_commit(row, text)
+            elif k in (curses.KEY_BACKSPACE, "\x7f", "\x08"):
+                ov["edit"] = ov["edit"][:-1]
+            elif isinstance(k, str) and k.isprintable():
+                ov["edit"] += k
+            return
+        if k in ("\x1b", "q", curses.KEY_F8):
+            save_conf(self.conf)
+            self.mode = "main"
+            self.ok("settings saved")
+            return
+        if k in (curses.KEY_UP, "k", curses.KEY_DOWN, "j", curses.KEY_PPAGE, curses.KEY_NPAGE):
+            step = {curses.KEY_UP: -1, "k": -1, curses.KEY_DOWN: 1, "j": 1,
+                    curses.KEY_PPAGE: -10, curses.KEY_NPAGE: 10}[k]
+            n = max(0, min(len(rows) - 1, sel + step))
+            while 0 < n < len(rows) - 1 and rows[n][0] == "sec":
+                n += 1 if step > 0 else -1
+            if rows[n][0] == "sec":
+                n = sel
+            ov["sel"] = n
+            return
+        if k in (curses.KEY_LEFT, "h", curses.KEY_RIGHT, "l"):
+            self.settings_adjust(row, -1 if k in (curses.KEY_LEFT, "h") else 1)
+        elif k in ("\n", "\r", curses.KEY_ENTER, " "):
+            if kind in ("color", "font", "size"):
+                ov["edit"] = ""
+            elif kind == "act" and key == "save":
+                ov["edit"] = ""
+            elif kind == "act" and key == "reset":
+                self.conf.get("overrides", {}).pop(self.conf["theme"], None)
+                self.pal.set(self.conf)
+                self.scr.clear()
+            elif kind == "act" and key == "relaunch":
+                save_conf(self.conf)
+                self.mode = "main"
+                self.cmd_relaunch([], "")
+            else:
+                self.settings_adjust(row, 1)
+        elif k == "r" and kind == "color":
+            th = self.conf["theme"]
+            self.conf.get("overrides", {}).get(th, {}).pop(key, None)
+            self.pal.set(self.conf)
+
+    def settings_adjust(self, row, d):
+        kind, key, _ = row
+        c = self.conf
+        if kind == "theme":
+            names = all_themes(c)
+            i = names.index(c["theme"]) if c["theme"] in names else 0
+            c["theme"] = names[(i + d) % len(names)]
+            self.pal.set(c)
+            self.scr.clear()
+        elif kind == "color":
+            self.set_color(key, (self.pal.colors[key] + d) % 256)
+        elif kind == "font":
+            fonts = self.mono_fonts()
+            if fonts:
+                i = fonts.index(c.get("font")) if c.get("font") in fonts else -1
+                c["font"] = fonts[(i + d) % len(fonts)]
+        elif kind == "size":
+            c["font_size"] = max(6, min(40, int(c.get("font_size", 13)) + d))
+        elif kind == "bool":
+            c[key] = not c.get(key, True)
+        elif kind == "panel":
+            self.toggle_panel(key)
+
+    def settings_commit(self, row, text):
+        kind, key, _ = row
+        if not text:
+            return
+        if kind == "color":
+            try:
+                self.set_color(key, color_val(text))
+            except ValueError:
+                self.err(f"'{text}' isn't a color - use #rrggbb or 0-255")
+        elif kind == "font":
+            self.conf["font"] = text
+        elif kind == "size" and text.isdigit():
+            self.conf["font_size"] = max(6, min(40, int(text)))
+        elif kind == "act" and key == "save":
+            self.save_theme(text)
 
     # -- confirm
     def ask(self, question, action):
@@ -1884,9 +2557,11 @@ class Deck:
             return self.procs_key(k)
         if self.mode == "help":
             return self.help_key(k)
+        if self.mode == "settings":
+            return self.settings_key(k)
 
         fkeys = {curses.KEY_F1: "help", curses.KEY_F2: "apps", curses.KEY_F3: "procs", curses.KEY_F4: "shell",
-                 curses.KEY_F5: "scan", curses.KEY_F6: "rain", curses.KEY_F7: "sysinfo", curses.KEY_F9: "theme +",
+                 curses.KEY_F5: "scan", curses.KEY_F6: "rain", curses.KEY_F7: "sysinfo", curses.KEY_F8: "settings", curses.KEY_F9: "theme +",
                  curses.KEY_F10: "quit"}
         if k in fkeys:
             self.execute(fkeys[k], record=False)
@@ -1950,7 +2625,19 @@ class Deck:
             self.inp = left[:i] + self.inp[self.cur:]
             self.cur = i
         elif k == "\x1b":
-            self.inp, self.cur = "", 0
+            self.scr.timeout(0)
+            try:
+                k2 = self.scr.get_wch()
+            except curses.error:
+                k2 = None
+            if isinstance(k2, str) and k2 in "123456789" and k2:
+                items = self.dock_items()
+                i = int(k2) - 1
+                if i < len(items):
+                    self.log([("▶ ", "pri"), (items[i], "hi"), ("  (dock)", "dim")])
+                    self.execute(items[i], record=False)
+            elif k2 is None:
+                self.inp, self.cur = "", 0
         elif isinstance(k, str) and k.isprintable():
             self.inp = self.inp[: self.cur] + k + self.inp[self.cur:]
             self.cur += len(k)
@@ -1976,7 +2663,14 @@ class Deck:
         else:
             cmd = parts[0].lower()
             if cmd in ("theme", "skin"):
-                cands = [t for t in list(THEMES) + ["+"] if t.startswith(word)]
+                cands = [t for t in all_themes(self.conf) + ["+", "save"] if t.startswith(word)]
+            elif cmd in ("get", "install"):
+                cands = sorted(a.key for a in self.catalog.market if a.kind == "get" and a.key.startswith(word))
+            elif cmd in ("panel", "panels"):
+                cands = [p for p in PANELS if p.startswith(word)] if len(parts) == 2 else \
+                    [o for o in ("on", "off") if o.startswith(word)]
+            elif cmd in ("color", "colour") and len(parts) == 2:
+                cands = [r for r, _ in ROLES if r.startswith(word)] + (["reset"] if "reset".startswith(word) else [])
             elif cmd == "fx":
                 cands = [t for t in ("on", "off", "scan", "boot") if t.startswith(word)]
             elif cmd in ("run", "jack", "launch", "spawn", "bg", "exec", "x", "kill") and len(parts) == 2:
@@ -2057,7 +2751,8 @@ class Deck:
             if app:
                 return self.launch_app(app)
         if shutil.which(prog) or os.path.isfile(os.path.join(self.cwd, prog)):
-            if os.path.basename(prog) in INTERACTIVE and not (os.path.basename(prog) in REPL_ONLY and len(parts) > 1):
+            interactive = os.path.basename(prog) in INTERACTIVE or line.startswith(INTERACTIVE_PREFIX)
+            if interactive and not (os.path.basename(prog) in REPL_ONLY and len(parts) > 1):
                 return self.foreground(["bash", "-c", line] if shutil.which("bash") else line, shell=True,
                                        pause=os.path.basename(prog) in ("apt", "apt-get", "sudo", "watch") or False,
                                        label=prog)
@@ -2066,6 +2761,10 @@ class Deck:
             app = self.catalog.exact(" ".join(parts))
             if app:
                 return self.launch_app(app)
+        hit = self.market_find(prog) if self.catalog.ready else None
+        if hit and hit.kind == "get":
+            return self.log([("  ✗ ", "bad"), (f"{hit.name} isn't installed yet - type ", "txt"),
+                             (f"get {hit.key}", "hi"), (f" ({hit.comment})", "dim")])
         self.err(f"'{prog}' not recognized - no such command or program on this deck. try: help / apps")
 
     def launch_app(self, a):
@@ -2106,7 +2805,7 @@ class Deck:
 
     def foreground(self, cmd, shell=False, pause=True, label=None, banner=True):
         label = label or (cmd if isinstance(cmd, str) else " ".join(cmd))
-        t = self.pal.t if self.c256 else THEMES["netrunner"]
+        t = self.pal.colors
         curses.def_prog_mode()
         curses.endwin()
         out = sys.stdout
@@ -2250,7 +2949,7 @@ class Deck:
 
     def cmd_shell(self, args, rest):
         sh = os.environ.get("SHELL") or shutil.which("bash") or "/bin/sh"
-        t = self.pal.t if self.c256 else THEMES["netrunner"]
+        t = self.pal.colors
         cmd = [sh]
         if os.path.basename(sh) == "bash":
             os.makedirs(CACHE_DIR, exist_ok=True)
@@ -2379,24 +3078,44 @@ class Deck:
             self.log([(f"  {k:<10}", "pri"), ("░ ", "deep"), (v, "hi" if k in ("HANDLE", "STATUS") else "txt")])
 
     def cmd_theme(self, args, rest):
-        names = list(THEMES)
+        names = all_themes(self.conf)
         if not args:
-            self.head("SKINS")
+            self.head("SKINS  (theme <name> · theme save <name> · F8 to edit colors)")
             for n in names:
                 mark = "▶" if n == self.pal.name else " "
-                self.log([(f"  {mark} {n}", "hi" if n == self.pal.name else "txt")])
+                tag = "  custom" if n not in THEMES else ""
+                self.log([(f"  {mark} {n}", "hi" if n == self.pal.name else "txt"), (tag, "dim")])
             return
-        name = args[0].lower()
+        if args[0].lower() == "save":
+            if len(args) < 2:
+                return self.err("usage: theme save <name>")
+            return self.save_theme(args[1])
+        name = args[0]
         if name == "+":
-            name = names[(names.index(self.pal.name) + 1) % len(names)]
-        if name not in THEMES:
+            name = names[(names.index(self.pal.name) + 1) % len(names)] if self.pal.name in names else names[0]
+        if name not in names:
             return self.err(f"unknown skin '{name}' - options: {', '.join(names)}")
+        self.set_theme(name)
+        self.ok(f"skin loaded: {name}")
+
+    def set_theme(self, name):
         self.conf["theme"] = name
         save_conf(self.conf)
-        self.pal.set(name)
+        self.pal.set(self.conf)
         self.scr.clear()
         self.glitch(0.4)
-        self.ok(f"skin loaded: {name}")
+
+    def save_theme(self, name):
+        name = re.sub(r"[^A-Za-z0-9_-]", "", name)[:24]
+        if not name or name in THEMES:
+            return self.err("pick a new name (letters, digits, - and _), not a built-in theme")
+        base = self.conf["theme"]
+        base = self.conf.get("themes", {}).get(base, {}).get("base", base) if base not in THEMES else base
+        theme = {"base": base}
+        theme.update({r: self.pal.colors[r] for r, _ in ROLES})
+        self.conf.setdefault("themes", {})[name] = theme
+        self.set_theme(name)
+        self.ok(f"theme saved as '{name}' - it's in ~/.config/netdeck/config.json")
 
     def cmd_fx(self, args, rest):
         a = args[0].lower() if args else ""
@@ -2454,6 +3173,8 @@ class Deck:
         self.foreground("sudo apt update && sudo apt full-upgrade", shell=True, label="system patch")
 
     def cmd_lock(self, args, rest):
+        if self.kiosk:
+            return self.err("the NETDECK session has no screen locker yet - use `logout` when you step away")
         for argv in (["loginctl", "lock-session"], ["xdg-screensaver", "lock"],
                      ["gnome-screensaver-command", "-l"]):
             if shutil.which(argv[0]):
@@ -2475,7 +3196,238 @@ class Deck:
         self._power("poweroff", "POWER OFF")
 
     def cmd_quit(self, args, rest):
+        if self.kiosk:
+            return self.cmd_logout(args, rest)
         self.running = False
+
+    def cmd_logout(self, args, rest):
+        if self.kiosk:
+            return self.ask("END THE NETDECK SESSION AND LOG OUT?", self._stop)
+        sid = os.environ.get("XDG_SESSION_ID")
+        if not sid or not shutil.which("loginctl"):
+            return self.err("can't find your login session - use your desktop's log-out menu")
+        self.ask("LOG OUT OF THE DESKTOP SESSION?",
+                 lambda: self.spawn(["loginctl", "terminate-session", sid], "log out"))
+
+    def _stop(self):
+        self.running = False
+
+    def cmd_relaunch(self, args, rest):
+        if not os.environ.get("NETDECK_SESSION"):
+            return self.err("relaunch works inside the NETDECK session or the app-menu launcher - "
+                            "otherwise close and reopen your terminal to apply font changes")
+        save_conf(self.conf)
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            open(os.path.join(CACHE_DIR, "relaunch"), "w").close()
+        except OSError as e:
+            return self.err(f"relaunch failed: {e}")
+        self.exit_code = 75
+        self.running = False
+
+    # -- catalog installs
+    def market_find(self, q):
+        ql = q.lower()
+        m = self.catalog.market
+        for a in m:
+            if ql in (a.key.lower(), a.name.lower(), a.bin):
+                return a
+        part = [a for a in m if ql in a.name.lower() or ql in a.key.lower()]
+        return part[0] if len(part) == 1 else None
+
+    def cmd_get(self, args, rest):
+        if not rest:
+            return self.err("usage: get <app>   - browse what's available with: apps (F2)")
+        if not self.catalog.ready:
+            return self.err("arsenal still indexing - try again in a second")
+        a = self.market_find(rest)
+        if not a:
+            cands = [x for x in self.catalog.market if rest.lower() in (x.name + " " + x.comment).lower()]
+            if cands:
+                self.info("did you mean:", "warn")
+                for x in cands[:10]:
+                    self.log([("    ", "txt"), (f"get {x.key:<16}", "acc"), (x.comment, "dim")])
+                return
+            return self.err(f"'{rest}' isn't in the catalog - try `apps` and press / to search")
+        if a.kind != "get":
+            return self.ok(f"{a.name} is already installed - type {a.argv[0]} to run it")
+        self.install_app(a)
+
+    def install_app(self, a):
+        script = install_script(a.inst, a.name)
+        if not script:
+            return self.err(f"no installer known for {a.name}")
+
+        def go():
+            self.foreground(["bash", "-c", script], label=f"installing {a.name}", pause=True)
+
+            def reload():
+                self.catalog.load()
+                hit = self.market_find(a.key)
+                if hit and hit.kind != "get":
+                    self.notes.append(([("installed ▸ ", "txt"), (a.name, "hi"), ("  run it: ", "dim"),
+                                        (" ".join(hit.argv), "acc")], "txt", "ARSENAL", "ok"))
+                else:
+                    self.notes.append((f"{a.name} doesn't seem to be on PATH yet - open a new shell or "
+                                       "log out/in if it was installed with pipx or snap", "warn", "ARSENAL", "warn"))
+
+            threading.Thread(target=reload, daemon=True).start()
+
+        self.ask(f"INSTALL {a.name.upper()}?  via {install_summary(a.inst)}", go)
+
+    # -- dock
+    def cmd_pin(self, args, rest):
+        items = list(self.dock_items())
+        if not rest:
+            return self.cmd_dock()
+        if rest in items:
+            return self.info(f"'{rest}' is already pinned", "dim")
+        if len(items) >= 9:
+            return self.err("dock is full (9) - unpin something first")
+        items.append(rest)
+        self.conf["dock"] = items
+        save_conf(self.conf)
+        self.ok(f"pinned '{rest}' to dock slot {len(items)}  (Alt+{len(items)})")
+
+    def cmd_unpin(self, args, rest):
+        items = list(self.dock_items())
+        if rest.isdigit() and 1 <= int(rest) <= len(items):
+            gone = items.pop(int(rest) - 1)
+        elif rest in items:
+            items.remove(rest)
+            gone = rest
+        else:
+            return self.err("usage: unpin <slot number|command>")
+        self.conf["dock"] = items
+        save_conf(self.conf)
+        self.ok(f"unpinned '{gone}'")
+
+    def cmd_dock(self):
+        self.head("DOCK  (Alt+number launches · pin <cmd> · unpin <n>)")
+        for i, c in enumerate(self.dock_items(), 1):
+            self.log([(f"  {i}  ", "acc"), (c, "txt")])
+
+    # -- customization
+    def cmd_settings(self, args, rest):
+        self.mode, self.ov = "settings", {"sel": 1, "top": 0}
+
+    def cmd_color(self, args, rest):
+        roles = dict(ROLES)
+        if not args:
+            self.head(f"COLORS · theme {self.conf['theme']}  (color <role> <#hex|0-255> · color reset)")
+            for r, lab in ROLES:
+                n = self.pal.colors[r]
+                self.log([(f"  {r:<5}", "acc"), (f"{n:>4}  {c256_to_hex(n)}  ", "txt"), (lab, "dim")])
+            return
+        if args[0] == "reset":
+            self.conf.get("overrides", {}).pop(self.conf["theme"], None)
+            self.pal.set(self.conf)
+            save_conf(self.conf)
+            return self.ok("colors reset to theme defaults")
+        if len(args) < 2 or args[0] not in roles:
+            return self.err("usage: color <role> <#hex|0-255>   roles: " + " ".join(roles))
+        try:
+            val = color_val(args[1])
+        except ValueError:
+            return self.err(f"'{args[1]}' isn't a color - use #rrggbb or 0-255")
+        self.set_color(args[0], val)
+        save_conf(self.conf)
+        self.ok(f"{args[0]} → {val} ({c256_to_hex(val)})")
+
+    def set_color(self, role, val):
+        th = self.conf["theme"]
+        if th in self.conf.get("themes", {}):
+            self.conf["themes"][th][role] = val
+        else:
+            self.conf.setdefault("overrides", {}).setdefault(th, {})[role] = val
+        self.pal.set(self.conf)
+
+    def cmd_font(self, args, rest):
+        if not args:
+            self.head("FONT")
+            self.info(f"family {self.conf.get('font') or '(terminal default)'} · size {self.conf.get('font_size', 13)}")
+            self.info("set with: font <family> [size]  ·  list fonts: fonts  ·  apply: relaunch", "dim")
+            return
+        size = None
+        if args[-1].isdigit():
+            size = int(args.pop())
+        if args:
+            self.conf["font"] = " ".join(args)
+        if size:
+            self.conf["font_size"] = max(6, min(40, size))
+        save_conf(self.conf)
+        self.ok(f"font: {self.conf.get('font')} {self.conf.get('font_size')}pt - type `relaunch` to apply")
+
+    def cmd_fonts(self, args, rest):
+        fonts = self.mono_fonts()
+        self.head(f"MONOSPACE FONTS · {len(fonts)} installed")
+        if not fonts:
+            self.info("none found (fc-list missing?) - try: sudo apt install fonts-jetbrains-mono", "dim")
+        for f in fonts:
+            mark = "▶ " if f == self.conf.get("font") else "  "
+            self.log([("  " + mark, "acc"), (f, "hi" if mark.strip() else "txt")])
+        self.info("more fonts: sudo apt install fonts-jetbrains-mono fonts-firacode fonts-hack fonts-ibm-plex", "dim")
+
+    def toggle_panel(self, name, on=None):
+        lay = self.conf["layout"]
+        present = any(name in lay[c] for c in ("left", "right"))
+        if on is None:
+            on = not present
+        if not on:
+            for c in ("left", "right"):
+                if name in lay[c]:
+                    lay[c].remove(name)
+        elif not present:
+            col = PANEL_HOME[name]
+            order = ["sys", "mem", "disk", "net", "bio", "stream", "procs"] if col == "left" else \
+                ["neural", "dock", "procs", "console"]
+            lst = lay[col]
+            idx = len(lst)
+            for i, p in enumerate(lst):
+                if p in order and name in order and order.index(p) > order.index(name):
+                    idx = i
+                    break
+            lst.insert(idx, name)
+        save_conf(self.conf)
+        return on
+
+    def cmd_panel(self, args, rest):
+        if not args:
+            self.head("PANELS  (panel <name> on|off · F8 for the full editor)")
+            lay = self.conf["layout"]
+            for p, lab in PANELS.items():
+                where = "left" if p in lay["left"] else ("right" if p in lay["right"] else "off")
+                self.log([(f"  {p:<8}", "acc"), (f"{where:<6}", "ok" if where != "off" else "deep"), (lab, "dim")])
+            return
+        name = args[0].lower()
+        if name not in PANELS:
+            return self.err("unknown panel - options: " + " ".join(PANELS))
+        on = None if len(args) < 2 else args[1].lower() in ("on", "show", "1", "yes")
+        self.ok(f"panel {name} {'on' if self.toggle_panel(name, on) else 'off'}")
+
+    # -- hardware shortcuts
+    def cmd_wifi(self, args, rest):
+        if not shutil.which("nmtui"):
+            return self.err("nmtui not found - get it with: get nmtui")
+        self.foreground(["nmtui"], pause=False, label="network")
+
+    def cmd_audio(self, args, rest):
+        for prog in ("pulsemixer", "alsamixer"):
+            if shutil.which(prog):
+                return self.foreground([prog], pause=False, label="audio")
+        self.err("no mixer found - get one with: get pulsemixer")
+
+    def cmd_bright(self, args, rest):
+        if not shutil.which("brightnessctl"):
+            return self.err("brightnessctl not found - sudo apt install brightnessctl")
+        if not args:
+            return self.exec_capture("brightnessctl -m | cut -d, -f4")
+        val = args[0].rstrip("%")
+        if not val.lstrip("+-").isdigit():
+            return self.err("usage: bright <percent>   e.g. bright 60")
+        num = val.lstrip("+-")
+        arg = f"+{num}%" if args[0].startswith("+") else (f"{num}%-" if args[0].startswith("-") else f"{num}%")
+        self.exec_capture(f"brightnessctl set {arg} >/dev/null && brightnessctl -m | cut -d, -f4")
 
     # ---------------------------------------------------------------- full-screen scenes
     def wait(self, sec):
@@ -2765,6 +3717,8 @@ class Deck:
                               (" · ", "dim"), (f"{len(c.bins)} binaries", "hi"),
                               (f" in {len(c.cats)} categories", "dim")], tag="ARSENAL", tag_role="acc")
             self.drain_jobs()
+            while self.notes:
+                self.log(*self.notes.popleft())
             self.ambient(self.now)
             self.scr.erase()
             self.draw()
@@ -2794,12 +3748,38 @@ class Deck:
             self.scr.timeout(70)
         if self.job:
             self.kill_job()
+        save_conf(self.conf)
         self.jack_out()
+        return self.exit_code
 
 
 # --------------------------------------------------------------------------------------------
 #  Entrypoints
 # --------------------------------------------------------------------------------------------
+
+
+def term_opts(term, conf):
+    """Terminal options that apply the deck's font and background (used by netdeck-session)."""
+    cols = resolve_theme(conf)
+    bg, fg = c256_to_hex(cols["bg"]), c256_to_hex(cols["txt"])
+    font = (conf.get("font") or "").strip()
+    try:
+        size = max(6, min(40, int(conf.get("font_size", 13))))
+    except (TypeError, ValueError):
+        size = 13
+    if term == "foot":
+        return ["-o", f"font={font or 'monospace'}:size={size}", "-o", f"colors.background={bg[1:]}",
+                "-o", f"colors.foreground={fg[1:]}", "-o", "pad=0x0"]
+    if term == "kitty":
+        o = ["-o", f"font_size={size}", "-o", f"background={bg}", "-o", f"foreground={fg}",
+             "-o", "window_padding_width=0", "-o", "hide_window_decorations=yes", "-o", "confirm_os_window_close=0"]
+        return o + (["-o", f"font_family={font}"] if font else [])
+    if term == "alacritty":
+        o = ["-o", f"font.size={size}", "-o", f'colors.primary.background="{bg}"',
+             "-o", f'colors.primary.foreground="{fg}"', "-o", "window.padding.x=0", "-o", "window.padding.y=0",
+             "-o", 'window.decorations="None"']
+        return o + (["-o", f'font.normal.family="{font}"'] if font else [])
+    return []
 
 
 def list_apps_text():
@@ -2825,13 +3805,17 @@ def main():
     ap.add_argument("--no-boot", action="store_true", help="skip the boot sequence")
     ap.add_argument("--fast", action="store_true", help="fast boot sequence")
     ap.add_argument("--no-fx", action="store_true", help="disable glitches and animations")
-    ap.add_argument("--theme", choices=list(THEMES), help="color theme")
+    ap.add_argument("--theme", help="color theme: " + ", ".join(THEMES) + " or a custom one")
+    ap.add_argument("--term-opts", metavar="TERMINAL", help=argparse.SUPPRESS)
     ap.add_argument("--list-apps", action="store_true", help="print the categorized program list and exit")
     ap.add_argument("--version", action="version", version=f"NETDECK//OS {VERSION}")
     args = ap.parse_args()
 
     if args.list_apps:
         list_apps_text()
+        return
+    if args.term_opts:
+        print("\n".join(term_opts(args.term_opts, load_conf())))
         return
     if not sys.platform.startswith("linux"):
         print("NETDECK//OS reads /proc - Linux only.")
@@ -2844,16 +3828,21 @@ def main():
     if os.environ.get("TERM", "") in ("xterm", "") and os.environ.get("COLORTERM"):
         os.environ["TERM"] = "xterm-256color"
 
+    result = {"code": 0}
+
     def _run(scr):
-        Deck(scr, args).run()
+        result["code"] = Deck(scr, args).run()
 
     try:
         curses.wrapper(_run)
     except KeyboardInterrupt:
         pass
+    if result["code"] == 75:  # relaunching the terminal window
+        sys.exit(75)
     sys.stdout.write("\x1b[0m")
-    t = THEMES[load_conf()["theme"]]
+    t = resolve_theme(load_conf())
     print(f"{ansi256(t['pri'])}◢ NETDECK{ansi256(t['dim'])} // jacked out. stay frosty, choom.\x1b[0m")
+    sys.exit(result["code"] or 0)
 
 
 if __name__ == "__main__":
