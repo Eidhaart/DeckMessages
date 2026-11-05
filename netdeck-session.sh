@@ -40,6 +40,8 @@ if [[ $MODE == kiosk ]]; then
     echo "cage is not installed (sudo apt install cage)" >&2
     exit 1
   fi
+  # turn off the one-time automatic login a session switch may have left on
+  sudo -n /usr/local/sbin/netdeck-switch-root --restore >/dev/null 2>&1 || true
   # -d: no window decorations   -s: allow Ctrl+Alt+F1..F7 to switch consoles
   exec cage -d -s -- "$(readlink -f "$0")" --kiosk-inner
 fi

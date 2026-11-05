@@ -21,11 +21,27 @@ cd netdeck
 font if they're missing, which needs sudo once.
 
 **One-time setup:** log out, click your name, click the **gear icon** in the bottom right, pick **NETDECK//OS**, and
-log in. Ubuntu remembers that choice. From then on there's no desktop, no panel and no delay: the screen goes from
-login straight into the deck's boot sequence.
+log in. From then on there's no desktop, no panel and no delay: the screen goes from login straight into the
+deck's boot sequence. `--session` also removes any older autostart, so the deck never pops up inside Ubuntu.
+
+### Switching between the deck and Ubuntu
+
+| From | How |
+|---|---|
+| the deck | **F10** → **U** (Ubuntu desktop), or type `ubuntu` |
+| Ubuntu | open **Jack into NETDECK** from the app menu (pin it to the dock), or run `netdeck-switch deck` |
+| any terminal | `netdeck-switch deck` / `netdeck-switch ubuntu` |
+
+After you confirm, you're logged straight into the other session with no password. The switch sets the session the
+login screen remembers, turns on automatic login for that one restart, and restarts the login screen. Automatic login
+turns itself off again about a minute later, and again at every login. If your machine doesn't auto-login, you land on
+the login screen with the right session already selected. Apps open in the session you leave are closed, so save
+your work first.
+
+This uses a small root helper, `/usr/local/sbin/netdeck-switch-root`, which does only this. A sudo rule in
+`/etc/sudoers.d/netdeck` lets your user run it without a password. `./install.sh --uninstall` removes both.
 
 - **No password at boot:** Settings → System → Users → **Automatic Login**. Power on, and the deck boots.
-- **Back to normal Ubuntu:** F10 logs out. Pick "Ubuntu" with the gear icon.
 - **Opening graphical apps:** apps like Firefox open fullscreen on top of the deck. Close them to return.
 - **Emergency exit:** Ctrl+Alt+F3 switches to a text console.
 

@@ -1206,6 +1206,8 @@ COMMANDS = [
     ("suspend", "", "put the machine to sleep", []),
     ("reboot", "", "reboot the machine", []),
     ("poweroff", "", "shut the machine down", ["shutdown"]),
+    ("ubuntu", "", "switch to the Ubuntu desktop session (and back with: session deck)", ["desktop"]),
+    ("session", "<deck|ubuntu>", "log straight into the other login session", []),
     ("logout", "", "end the session (log out)", []),
     ("quit", "", "jack out", ["exit", "jackout", "q"]),
 ]
@@ -1280,6 +1282,7 @@ class Deck:
         self.mode = "main"
         self.ov = {}
         self.confirm = None
+        self.choice = None
         self.job = None
         self.jobq = queue.Queue()
         self.children = []
@@ -1553,6 +1556,8 @@ class Deck:
         self.draw_toasts()
         if self.confirm:
             self.draw_confirm()
+        elif self.choice:
+            self.draw_choice()
         if now < self.glitch_until:
             self.apply_glitch(1.0)
         elif self.conf["fx"] and random.random() < 0.035:
@@ -2731,6 +2736,21 @@ class Deck:
     def ask(self, question, action):
         self.confirm = (question, action)
 
+    def draw_choice(self):
+        q, opts = self.choice
+        line = "    ".join(f"[ {k.upper()} ] {lab}" for k, lab, _f, _r in opts) + "    [ ESC ] STAY"
+        w = min(self.W - 4, max(56, len(line) + 10))
+        y, x, h, w = self.box("CONFIRM", "", w=w, h=7, role="acc")
+        self.put(y + 2, x + (w - len(q)) // 2, q, self.c("txt", y + 2, True))
+        ox = x + (w - len(line)) // 2
+        cx = ox
+        for k, lab, _f, role in opts:
+            self.put(y + 4, cx, "[   ]", self.c("dim", y + 4))
+            self.put(y + 4, cx + 2, k.upper(), self.c(role, y + 4, True))
+            self.put(y + 4, cx + 6, lab, self.c("txt", y + 4))
+            cx += len(f"[ {k.upper()} ] {lab}") + 4
+        self.put(y + 4, cx, "[ ESC ] STAY", self.c("dim", y + 4))
+
     def draw_confirm(self):
         q = self.confirm[0]
         w = min(self.W - 4, max(50, len(q) + 10))
@@ -2752,6 +2772,17 @@ class Deck:
     def handle_key(self, k):
         if k == curses.KEY_RESIZE:
             self.resize()
+            return
+        if self.choice:
+            _q, opts = self.choice
+            key = k.lower() if isinstance(k, str) else None
+            for ck, _lab, fn, _role in opts:
+                if key == ck:
+                    self.choice = None
+                    fn()
+                    return
+            if k in ("\x1b", "n", "N", "q", curses.KEY_F10):
+                self.choice = None
             return
         if self.confirm:
             q, action = self.confirm
@@ -3413,8 +3444,35 @@ class Deck:
 
     def cmd_quit(self, args, rest):
         if self.kiosk:
-            return self.cmd_logout(args, rest)
+            self.choice = ("JACK OUT OF THE DECK", [
+                ("u", "UBUNTU DESKTOP", lambda: self.switch_session("ubuntu"), "acc"),
+                ("l", "LOG OUT", self._stop, "bad"),
+            ])
+            return
         self.running = False
+
+    def switch_bin(self):
+        p = os.path.join(HOME, ".local", "bin", "netdeck-switch")
+        return p if os.access(p, os.X_OK) else shutil.which("netdeck-switch")
+
+    def switch_session(self, target):
+        sw = self.switch_bin()
+        if not sw or not os.path.exists("/usr/local/sbin/netdeck-switch-root"):
+            return self.err("session switching isn't installed - run ./install.sh --session in the netdeck folder")
+        self.log("switching session - see you on the other side", "acc", tag="SESSION", tag_role="acc")
+        save_conf(self.conf)
+        self.foreground([sw, target], pause=False, label=f"switch to {target}")
+
+    def cmd_ubuntu(self, args, rest):
+        self.ask("SWITCH TO THE UBUNTU DESKTOP?  apps opened here will close",
+                 lambda: self.switch_session("ubuntu"))
+
+    def cmd_session(self, args, rest):
+        if not args or args[0] not in ("deck", "ubuntu"):
+            return self.err("usage: session deck|ubuntu")
+        label = "NETDECK" if args[0] == "deck" else "THE UBUNTU DESKTOP"
+        self.ask(f"LOG STRAIGHT INTO {label}?  apps in this session will close",
+                 lambda: self.switch_session(args[0]))
 
     def cmd_logout(self, args, rest):
         if self.kiosk:
