@@ -33,10 +33,11 @@ import struct
 import subprocess
 import sys
 import threading
+import unicodedata
 import time
 from collections import deque
 
-VERSION = "2.0.77"
+VERSION = "3.0.77"
 HOME = os.path.expanduser("~")
 CONF_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "netdeck")
 DATA_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"), "netdeck")
@@ -53,6 +54,10 @@ DEFAULT_CONF = {
     "boot": True,             # boot sequence on start
     "ticker": True,           # scrolling news ticker
     "neural": True,           # small neural-link readout in the top bar
+    "kanji": True,            # Japanese kicker labels (needs a CJK font, Ubuntu ships Noto CJK)
+    "toasts": True,           # pop-up notifications
+    "ornament": "brackets",   # panel corners: brackets | barcode | none
+    "exact_colors": True,     # load exact hex colors into the terminal palette when it allows
     "font": "JetBrains Mono", # applied by netdeck-session (foot / kitty / alacritty)
     "font_size": 13,
     "layout": DEFAULT_LAYOUT,
@@ -65,19 +70,58 @@ DEFAULT_CONF = {
 #  Look & feel
 # --------------------------------------------------------------------------------------------
 
-# Roles: bg/bg2 (alternating scanline rows), pri (frame + headers), acc (highlights),
-# hi (hot text), dim (chrome), txt (body), ok/warn/bad (status), mag (2nd accent), deep (empty bars)
+# Roles: bg/bg2 (alternating scanline rows), tint (panel header bars), line (borders), pri (structure, titles),
+# acc (data, kickers), hi (hot text), txt (body), dim (labels, frame text), deep (empty bars, shadows),
+# ok/warn/bad (status), mag (second accent).  Palettes follow the house style of RunDeck and SixthDeck.
+def _t(bg, bg2, tint, line, pri, acc, hi, txt, dim, deep, ok, warn, bad, mag):
+    return dict(bg=bg, bg2=bg2, tint=tint, line=line, pri=pri, acc=acc, hi=hi, txt=txt, dim=dim, deep=deep,
+                ok=ok, warn=warn, bad=bad, mag=mag)
+
+
 THEMES = {
-    "netrunner": dict(bg=233, bg2=234, pri=203, acc=87, hi=227, dim=95, txt=224, ok=85, warn=215, bad=197, mag=199, deep=52),
-    "arasaka":   dict(bg=232, bg2=233, pri=196, acc=255, hi=220, dim=88, txt=251, ok=121, warn=214, bad=196, mag=210, deep=52),
-    "netwatch":  dict(bg=233, bg2=234, pri=39, acc=51, hi=231, dim=24, txt=153, ok=85, warn=221, bad=203, mag=141, deep=17),
-    "toxic":     dict(bg=232, bg2=233, pri=82, acc=190, hi=231, dim=28, txt=157, ok=46, warn=226, bad=197, mag=135, deep=22),
-    "afterlife": dict(bg=233, bg2=234, pri=207, acc=87, hi=227, dim=96, txt=225, ok=85, warn=215, bad=197, mag=171, deep=53),
-    "amber":     dict(bg=232, bg2=233, pri=214, acc=230, hi=231, dim=94, txt=222, ok=150, warn=220, bad=202, mag=209, deep=52),
+    # municipal grid: midnight blue-black, red structure, cyan data, yellow alerts
+    "netrunner":  _t("#070a13", "#0a0d18", "#1a0b14", "#5e1a2b", "#ff1238", "#1fe3f0", "#f6e33b", "#ebe7ef",
+                     "#857e93", "#2a1318", "#22f59a", "#f6e33b", "#ff4f5e", "#5b8cff"),
+    # corp-issue: blood-black, Arasaka red, chrome white, cyan kickers
+    "arasaka":    _t("#0a0708", "#100809", "#1c0e11", "#6a2f36", "#ff2a3c", "#00f0ff", "#fcee0a", "#e9dfe0",
+                     "#8a3a40", "#2a1216", "#00ff9f", "#fcee0a", "#ff2a3c", "#ff2e88"),
+    "sodium":     _t("#080a0e", "#0c1016", "#161d28", "#36485f", "#ffae3d", "#43dbe8", "#ffd27a", "#e9e5da",
+                     "#8f98a8", "#1a2230", "#7ee3a0", "#ffae3d", "#ff506a", "#b995ff"),
+    "matrix":     _t("#04090c", "#06131a", "#0a1a22", "#1e5a6a", "#3fe3ff", "#ff6fb1", "#7deeff", "#dff6fb",
+                     "#5a7d88", "#0d2730", "#5dffb0", "#ffe14d", "#ff5577", "#5dffb0"),
+    "neon":       _t("#0b0620", "#100a2b", "#1a0f3d", "#57349f", "#ff3ea5", "#2df0ff", "#ffe14d", "#f3e9ff",
+                     "#8a78b8", "#251552", "#5dffb0", "#ffe14d", "#ff5a5a", "#ff7ad0"),
+    "blackout":   _t("#000000", "#070707", "#111111", "#4a4a4a", "#ffe600", "#00e5ff", "#ffffff", "#f2f2f2",
+                     "#8a8a8a", "#1e1e1e", "#3dff8a", "#ffe600", "#ff5252", "#ff8cff"),
+    "chrome":     _t("#0b0c0e", "#101215", "#16191d", "#434b56", "#ff6a13", "#c9d3dc", "#ffcc33", "#e8ecef",
+                     "#6c7884", "#1f2329", "#8be36b", "#ffcc33", "#ff3b3b", "#c9d3dc"),
+    "ronin":      _t("#0b0909", "#110d0d", "#1a1213", "#553c3e", "#d7263d", "#d4af37", "#7fb8c9", "#efe6e2",
+                     "#7d6a66", "#241a1b", "#9ccc65", "#d4af37", "#ff5f5f", "#7fb8c9"),
+    "blood":      _t("#0a0405", "#120607", "#1d0c0d", "#6e2020", "#ff2a1a", "#ff9c2a", "#ffd0c4", "#ffe9e4",
+                     "#7d5a54", "#2a0b0b", "#8be36b", "#ff9c2a", "#ff2a1a", "#ff6a50"),
+    "ghost":      _t("#090d10", "#0d1418", "#141c22", "#3a5361", "#e8f6ff", "#7cf9ff", "#fff38a", "#eef8ff",
+                     "#64798a", "#172028", "#7cf7a0", "#fff38a", "#ff6a8a", "#bff6ff"),
+    "astral":     _t("#0a0710", "#120c1e", "#1b1429", "#4f3a78", "#c39bff", "#ffd27a", "#7fd9ff", "#efe9fb",
+                     "#6f6488", "#24163a", "#8ef0c0", "#ffd27a", "#ff6a8a", "#7fd9ff"),
+    "resonance":  _t("#05060c", "#090b16", "#0d1020", "#353f6e", "#7cf7e4", "#c07bff", "#ff8ad8", "#e6f4ff",
+                     "#66719a", "#141a33", "#7cf7a0", "#ffe28a", "#ff5c8a", "#ff8ad8"),
+    "hazard":     _t("#0d0e10", "#121417", "#191c20", "#4a525c", "#ffc400", "#ff7a1a", "#4fc3f7", "#eceae4",
+                     "#7b8088", "#22262b", "#7ed957", "#ff7a1a", "#ff4d4d", "#4fc3f7"),
+    "noir":       _t("#0e0d0c", "#131210", "#1a1816", "#544c44", "#d9a35b", "#4fd1c5", "#e86a92", "#ece4d8",
+                     "#857b6f", "#24211e", "#9ccf7a", "#d9a35b", "#ff6b5b", "#e86a92"),
+    "spraypaint": _t("#0d0d10", "#121217", "#17171e", "#454558", "#ff2d95", "#2de2e6", "#ffd23f", "#f2f0f5",
+                     "#7a7a90", "#1e1e28", "#b8ff3c", "#ffd23f", "#ff4040", "#b8ff3c"),
+    "jade":       _t("#060c0b", "#091312", "#0e1d1b", "#2a6159", "#e8c15a", "#3fe0b0", "#f5dc8e", "#e6f2ee",
+                     "#5f8a80", "#12302b", "#7ef0b0", "#e8c15a", "#ff6270", "#b995ff"),
+    "rust":       _t("#0e0a07", "#140f0b", "#1e1610", "#664a31", "#e2762a", "#6cc7b8", "#c79cff", "#efe4d6",
+                     "#8a7560", "#2a1f16", "#9bd16b", "#e2a03c", "#ff5a4a", "#c79cff"),
+    "terminal":   _t("#020a04", "#041107", "#07180e", "#1e6b3f", "#39ff7a", "#d6ff5c", "#7dffd0", "#c9f7d6",
+                     "#4f8a62", "#0c2a16", "#39ff7a", "#d6ff5c", "#ff5a4d", "#7dffd0"),
 }
-BASIC = dict(bg=curses.COLOR_BLACK, bg2=curses.COLOR_BLACK, pri=curses.COLOR_RED, acc=curses.COLOR_CYAN,
-             hi=curses.COLOR_YELLOW, dim=curses.COLOR_BLUE, txt=curses.COLOR_WHITE, ok=curses.COLOR_GREEN,
-             warn=curses.COLOR_YELLOW, bad=curses.COLOR_RED, mag=curses.COLOR_MAGENTA, deep=curses.COLOR_BLUE)
+BASIC = dict(bg=curses.COLOR_BLACK, bg2=curses.COLOR_BLACK, tint=curses.COLOR_BLACK, line=curses.COLOR_RED,
+             pri=curses.COLOR_RED, acc=curses.COLOR_CYAN, hi=curses.COLOR_YELLOW, dim=curses.COLOR_BLUE,
+             txt=curses.COLOR_WHITE, ok=curses.COLOR_GREEN, warn=curses.COLOR_YELLOW, bad=curses.COLOR_RED,
+             mag=curses.COLOR_MAGENTA, deep=curses.COLOR_BLUE)
 
 SPARK = "▁▂▃▄▅▆▇█"
 KATA = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ"
@@ -116,7 +160,7 @@ FEED = [
     ("DAEMON", "mag", "ghostkey resident in kernel space - nominal"),
     ("TELEMETRY", "dim", "corp beacon blackholed - packets dropped"),
     ("FIXER", "hi", "new gig on the board - flagged for later"),
-    ("BIOMON", "ok", "vitals nominal. stay frosty, choom"),
+    ("VITALS", "ok", "wetware stable. stay frosty, choom"),
     ("OLDNET", "mag", "static beyond the wall... something is listening"),
     ("ICE", "warn", "black ICE probe deflected at port 2077"),
     ("CACHE", "dim", "shredding volatile logs - 0 traces left"),
@@ -434,10 +478,10 @@ def load_conf():
     return conf
 
 
-ROLES = [("pri", "frame & headers"), ("acc", "highlights"), ("hi", "hot text"), ("txt", "body text"),
-         ("dim", "labels & chrome"), ("deep", "empty bars & shadows"), ("bg", "background"),
-         ("bg2", "scanline rows"), ("ok", "status ok"), ("warn", "warning"), ("bad", "alert"),
-         ("mag", "second accent")]
+ROLES = [("pri", "structure & titles"), ("acc", "data & kickers"), ("hi", "hot text"), ("txt", "body text"),
+         ("dim", "labels & frame text"), ("line", "borders"), ("tint", "header bars"), ("deep", "empty bars"),
+         ("bg", "background"), ("bg2", "scanline rows"), ("ok", "status ok"), ("warn", "warning"),
+         ("bad", "alert"), ("mag", "second accent")]
 CUBE = [0, 95, 135, 175, 215, 255]
 BASE16 = ["000000", "800000", "008000", "808000", "000080", "800080", "008080", "c0c0c0",
           "808080", "ff0000", "00ff00", "ffff00", "0000ff", "ff00ff", "00ffff", "ffffff"]
@@ -475,12 +519,22 @@ def hex_to_256(h):
 
 def color_val(v):
     """Accept 0-255, "203" or "#ff5f5f" and return a 256-color index."""
+    return hex_to_256(to_hex(v))
+
+
+def to_hex(v):
+    """Normalize a color (0-255, "203", "#f5f", "#ff55ff", "ff55ff") to "#rrggbb"."""
     if isinstance(v, int):
-        return max(0, min(255, v))
-    v = str(v).strip()
-    if v.startswith("#") or (len(v) in (3, 6) and not v.isdigit()):
-        return hex_to_256(v)
-    return max(0, min(255, int(v)))
+        return c256_to_hex(max(0, min(255, v)))
+    v = str(v).strip().lower()
+    if v.isdigit():
+        return c256_to_hex(max(0, min(255, int(v))))
+    h = v.lstrip("#")
+    if len(h) == 3:
+        h = "".join(ch * 2 for ch in h)
+    if len(h) != 6 or any(ch not in "0123456789abcdef" for ch in h):
+        raise ValueError(v)
+    return "#" + h
 
 
 def all_themes(conf):
@@ -488,6 +542,7 @@ def all_themes(conf):
 
 
 def resolve_theme(conf, name=None):
+    """The theme's colors as {role: "#rrggbb"}, with custom themes and overrides applied."""
     name = name or conf.get("theme", "netrunner")
     custom = conf.get("themes", {}).get(name)
     if isinstance(custom, dict):
@@ -500,7 +555,7 @@ def resolve_theme(conf, name=None):
         for k, v in d.items():
             if k in cols:
                 try:
-                    cols[k] = color_val(v)
+                    cols[k] = to_hex(v)
                 except (ValueError, TypeError):
                     pass
     return cols
@@ -513,6 +568,11 @@ def save_conf(conf):
             json.dump(conf, fh, indent=2)
     except OSError:
         pass
+
+
+def dw(s):
+    """Display width: CJK characters take two terminal cells."""
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in s)
 
 
 def ansi256(n):
@@ -1037,18 +1097,45 @@ class Catalog:
 
 
 class Pal:
-    def __init__(self, conf, c256):
+    """Color pairs by role. On terminals that can redefine colors (foot, kitty, GNOME Terminal...) the theme's
+    exact hex colors are loaded into palette slots; elsewhere each color uses its nearest 256-color match."""
+    SLOT0 = 16
+
+    def __init__(self, conf, c256, exact=False):
         self.c256 = c256
+        self.exact = exact and c256
         self.cache = {}
         self.next = 1
         self.set(conf)
 
     def set(self, conf):
         self.name = conf["theme"]
-        self.colors = resolve_theme(conf)
-        self.t = self.colors if self.c256 else BASIC
+        self.hex = resolve_theme(conf)
+        self.colors = {r: hex_to_256(h) for r, h in self.hex.items()}
+        if not self.c256:
+            self.t = BASIC
+        elif self.exact:
+            self.t, self.slots = {}, {}
+            for r, h in self.hex.items():
+                if h not in self.slots:
+                    self.slots[h] = self.SLOT0 + len(self.slots)
+                self.t[r] = self.slots[h]
+            self.reapply()
+        else:
+            self.t = self.colors
         self.cache.clear()
         self.next = 1
+
+    def reapply(self):
+        """(Re)load the exact colors into the terminal palette, e.g. after a program ran in the foreground."""
+        if not self.exact:
+            return
+        for h, slot in self.slots.items():
+            r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+            try:
+                curses.init_color(slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
+            except curses.error:
+                pass
 
     def raw(self, fg, bg):
         """Attribute for explicit 256-color indices (used by swatches)."""
@@ -1124,12 +1211,19 @@ COMMANDS = [
 ]
 
 PANELS = {  # name: title shown in settings
-    "sys": "SYSCORE  cpu", "mem": "MEMORY", "disk": "STORAGE", "net": "NET UPLINK", "bio": "BIOMON  temps/power",
+    "sys": "SYSCORE  cpu", "mem": "MEMORY", "disk": "STORAGE", "net": "NET UPLINK", "bio": "VITALS  temps/power",
     "procs": "PROCESSES", "dock": "DOCK  pinned apps", "console": "CONSOLE", "neural": "NEURAL LINK  big panel",
     "stream": "DATASTREAM  hex",
 }
 PANEL_HOME = {"sys": "left", "mem": "left", "disk": "left", "net": "left", "bio": "left", "procs": "left",
               "stream": "left", "dock": "right", "neural": "right", "console": "right"}
+
+JP_LABELS = {
+    "SYSCORE": "演算", "MEMORY": "記憶", "STORAGE": "保存", "NET UPLINK": "接続", "VITALS": "生体",
+    "PROCESSES": "処理", "DOCK": "装備", "CONSOLE": "端末", "NEURAL LINK": "神経", "DATASTREAM": "データ",
+    "PREVIEW": "外観", "ARSENAL // INSTALLED PROGRAMS": "兵器庫", "PROCESS MANAGER": "処理",
+    "CODEX // COMMAND REFERENCE": "案内", "TUNE // CUSTOMIZE THE DECK": "外観", "CONFIRM": "確認",
+}
 
 KEYBAR = [("F1", "CODEX"), ("F2", "ARSENAL"), ("F3", "PROCS"), ("F4", "SHELL"), ("F5", "RECON"),
           ("F6", "RAIN"), ("F7", "DOSSIER"), ("F8", "TUNE"), ("F9", "SKIN"), ("F10", "JACK OUT")]
@@ -1156,7 +1250,9 @@ class Deck:
         self.c256 = curses.COLORS >= 256
         if not self.c256:
             self.conf["scan"] = False
-        self.pal = Pal(self.conf, self.c256)
+        exact = (self.conf.get("exact_colors", True) and not os.environ.get("NETDECK_NO_EXACT")
+                 and curses.can_change_color())
+        self.pal = Pal(self.conf, self.c256, exact)
         curses.raw()
         curses.noecho()
         scr.keypad(True)
@@ -1201,6 +1297,8 @@ class Deck:
         self.kiosk = bool(os.environ.get("NETDECK_KIOSK"))
         self.exit_code = 0
         self.notes = deque()  # messages from background threads
+        self.toasts = []
+        self._pn = None  # panel number for the next panel() call
 
     # ---------------------------------------------------------------- persistence
     def _load_history(self):
@@ -1276,24 +1374,80 @@ class Deck:
         return s
 
     def panel(self, y, x, h, w, title, tag="", role="pri"):
+        """HUD plate: tinted header bar with `NN // T I T L E  漢字`, thin borders, corner brackets."""
         if h < 2 or w < 10:
             return
-        label = f" {self.gtext(title)} "
-        self.put(y, x, "◢", self.c(role, y, True))
-        self.put(y, x + 1, label, self.inv(role))
-        lx = x + 1 + len(label)
-        self.put(y, lx, "━" * max(0, x + w - 1 - lx), self.c(role, y))
-        if tag and w > len(label) + len(tag) + 8:
-            self.put(y, x + w - 4 - len(tag), f" {tag} ", self.c("dim", y))
-        self.put(y, x + w - 1, "┑", self.c(role, y))
+        num, self._pn = self._pn, None
+        orn = self.conf.get("ornament", "brackets")
+        tint = self.pal("txt", "tint")
+        self.put(y, x + 1, " " * (w - 2), tint)
+        self.put(y, x, "┏" if orn == "brackets" else "┌", self.c(role if orn == "brackets" else "line", y, True))
+        self.put(y, x + w - 1, "┐", self.c("line", y))
+        cx = x + 2
+        if num is not None:
+            self.put(y, cx, f"{num:02d}", self.pal("acc", "tint", True))
+            self.put(y, cx + 2, " // ", self.pal("dim", "tint"))
+            cx += 6
+        jp = JP_LABELS.get(title, "") if self.conf.get("kanji", True) else ""
+        tag_w = len(tag) + 2 if tag else 0
+        bar_w = 10 if orn == "barcode" else 0
+        room = x + w - 2 - cx - tag_w - bar_w
+        spaced = " ".join(title)
+        shown = spaced if len(spaced) + (dw(jp) + 2 if jp else 0) <= room and len(title) <= 12 else title
+        if len(shown) > room:
+            shown = shown[: max(0, room)]
+        self.put(y, cx, self.gtext(shown), self.pal(role, "tint", True))
+        cx += len(shown)
+        if jp and cx + 2 + dw(jp) <= x + w - 2 - tag_w - bar_w:
+            self.put(y, cx + 2, jp, self.pal("dim", "tint"))
+        rx = x + w - 2
+        if tag and tag_w <= room:
+            rx -= tag_w
+            self.put(y, rx, f" {tag} ", self.pal("dim", "tint"))
+        if bar_w and rx - bar_w > cx + 2:
+            rnd = random.Random(title)
+            code = "".join(rnd.choice("▌▍▎▏▋▊█ ") for _ in range(bar_w - 2))
+            self.put(y, rx - bar_w + 1, code, self.pal(role, "tint"))
         for yy in range(y + 1, y + h - 1):
-            self.put(yy, x, "│", self.c("dim", yy))
-            self.put(yy, x + w - 1, "│", self.c("dim", yy))
+            self.put(yy, x, "│", self.c("line", yy))
+            self.put(yy, x + w - 1, "│", self.c("line", yy))
         yb = y + h - 1
-        self.put(yb, x, "└" + "─" * (w - 2) + "┘", self.c("dim", yb))
-        acc = min(6, w - 4)
-        self.put(yb, x + w - 1 - acc, "━" * acc + "┙", self.c(role, yb))
-        self.put(yb, x + 2, "▪▪▪", self.c("deep", yb))
+        self.put(yb, x, "└" + "─" * (w - 2) + "┘", self.c("line", yb))
+        if orn == "brackets":
+            if h > 2:
+                self.put(y + 1, x, "┃", self.c(role, y + 1, True))
+                self.put(yb - 1, x + w - 1, "┃", self.c(role, yb - 1, True))
+            self.put(yb, x + w - 4, "━━━┛", self.c(role, yb, True))
+
+    def toast(self, title, body="", role="acc", secs=3.5):
+        if not self.conf.get("toasts", True):
+            return
+        self.toasts.append([title, body, role, time.time() + secs])
+        self.toasts = self.toasts[-3:]
+
+    def draw_toasts(self):
+        now = self.now
+        self.toasts = [t for t in self.toasts if t[3] > now]
+        if not self.toasts or self.W < 90:
+            return
+        w = min(52, self.W // 3)
+        x = self.W - w - 2
+        y = self.H - 3
+        for title, body, role, until in reversed(self.toasts):
+            h = 3 if body else 2
+            y -= h
+            if y < 3:
+                break
+            for i in range(h):
+                self.put(y + i, x, " " * w, self.pal("txt", "tint"))
+                self.put(y + i, x, "▌", self.pal(role, "tint", True))
+            self.put(y, x + 2, title[: w - 4], self.pal(role, "tint", True))
+            if body:
+                self.put(y + 1, x + 2, body[: w - 4], self.pal("txt", "tint"))
+            left = max(0.0, until - now)
+            n = int((w - 3) * min(1.0, left / 3.5))
+            self.put(y + h - 1, x + 2, "▔" * n, self.pal("line", "tint"))
+            y -= 1
 
     # ---------------------------------------------------------------- console log
     def log(self, segs, role="txt", tag=None, tag_role="dim"):
@@ -1338,6 +1492,7 @@ class Deck:
             self.trace_rate = random.uniform(0.35, 0.9)
             self.log("trace attempt deflected - proxy chain rerouted, trail burned", "warn",
                      tag="NETWATCH", tag_role="bad")
+            self.toast("TRACE DEFLECTED", "netwatch lost the trail  //  proxy chain rerouted", "warn")
             self.glitch(0.35)
 
     def glitch(self, dur=0.25):
@@ -1351,13 +1506,14 @@ class Deck:
             if now - self.alert_cd.get(key, 0) > 90:
                 self.alert_cd[key] = now
                 self.log(msg, role, tag=tag, tag_role=role)
+                self.toast(tag, msg, role, 5)
 
         if st.cpu > 92:
             top = st.procs[0][6] if st.procs else "?"
-            fire("cpu", f"thermal spike - cpu at {st.cpu:.0f}% (top: {top})", "warn", "BIOMON")
+            fire("cpu", f"thermal spike - cpu at {st.cpu:.0f}% (top: {top})", "warn", "VITALS")
         mp = st.mem["used"] / st.mem["total"] * 100
         if mp > 90:
-            fire("mem", f"memory saturation {mp:.0f}% - consider flatlining something", "bad", "BIOMON")
+            fire("mem", f"memory saturation {mp:.0f}% - consider flatlining something", "bad", "VITALS")
         if st.battery and st.battery[0] < 15 and st.battery[1].lower() == "discharging":
             fire("bat", f"power cell at {st.battery[0]}% - find a socket, choom", "bad", "POWER")
         if st.rx > 8e6:
@@ -1394,6 +1550,7 @@ class Deck:
             self.draw_help()
         elif self.mode == "settings":
             self.draw_settings()
+        self.draw_toasts()
         if self.confirm:
             self.draw_confirm()
         if now < self.glitch_until:
@@ -1425,53 +1582,56 @@ class Deck:
                 self.put(y, x, "".join(random.choice(GLITCH) for _ in range(ln)), self.c(role, y, True))
 
     def draw_header(self, now):
+        """Top frame: `◢ NETDECK  OS v3 // 端末 // SECTOR 7 // NODE 0x…` … neural readout · operator · clock."""
         W = self.W
         y = 0
-        self.put(y, 0, " " * W, self.c("txt", y))
-        left = " ◢ NETDECK//OS "
+        self.put(y, 0, " " * W, self.pal("txt", "tint"))
+        left = " ◢ NETDECK "
         self.put(y, 0, left, self.inv("pri"))
-        x = len(left)
-        seg = f" v{VERSION} ░ ARASAKA SUBNET-07 ░ NODE 0x{self.node} ░ "
-        self.put(y, x, seg, self.c("dim", y))
-        x += len(seg)
-        blink = int(now * 2) % 2 == 0
-        st = " ▓ HIJACKED ▓ "
-        self.put(y, x, st, self.inv("bad") if blink else self.c("bad", y, True))
-        clock = time.strftime(" %H:%M:%S ")
-        date = time.strftime(" %d.%m.%Y ")
-        who = f" {self.user}@{self.host} "
-        right_len = len(who) + len(date) + len(clock) + 2
-        rx = W - right_len
-        x += len(st)
-        if self.conf.get("neural", True) and rx - x > 40:
-            self.draw_neural_mini(y, rx - 33, now)
+        x = len(left) + 1
+        segs = [f"OS v{VERSION}"] + (["端末"] if self.conf.get("kanji", True) else []) + \
+            ["SECTOR 7", f"NODE 0x{self.node}"]
+        for i, seg in enumerate(segs):
+            if i:
+                self.put(y, x, " // ", self.pal("line", "tint", True))
+                x += 4
+            self.put(y, x, seg, self.pal("dim", "tint"))
+            x += dw(seg)
+        clock = time.strftime("%H:%M:%S")
+        date = time.strftime("%d.%m.%Y")
+        who = f"{self.user}@{self.host}"
+        right = f"{who}  //  {date}  {clock} "
+        rx = W - len(right)
         if rx > x + 2:
-            self.put(y, rx, who, self.c("acc", y, True))
-            self.put(y, rx + len(who), "▐", self.c("pri", y))
-            self.put(y, rx + len(who) + 1, date, self.c("txt", y))
-            self.put(y, rx + len(who) + 1 + len(date), "▐", self.c("pri", y))
-            self.put(y, W - len(clock), clock, self.inv("hi"))
-        elif W - len(clock) > x:
-            self.put(y, W - len(clock), clock, self.inv("hi"))
-        # ticker
+            self.put(y, rx, who, self.pal("acc", "tint", True))
+            self.put(y, rx + len(who), "  //  ", self.pal("line", "tint", True))
+            self.put(y, rx + len(who) + 6, date, self.pal("dim", "tint"))
+            self.put(y, W - len(clock) - 1, clock, self.pal("txt", "tint", True))
+            if self.conf.get("neural", True) and rx - x > 36:
+                self.draw_neural_mini(y, rx - 32, now)
+        elif W - len(clock) - 1 > x:
+            self.put(y, W - len(clock) - 1, clock, self.pal("txt", "tint", True))
+        # news ticker
         y = 1
         if not self.conf.get("ticker", True):
-            self.put(y, 0, "◤◢" + "━" * (W - 3) + "◣", self.c("deep", y))
+            self.put(y, 0, "━" * W, self.c("line", y))
             return
         st_ = self.stats
         mp = st_.mem["used"] / st_.mem["total"] * 100
         live = (f"CPU {st_.cpu:3.0f}%  MEM {mp:3.0f}%  NET ▼{fmt_rate(st_.rx):>10} ▲{fmt_rate(st_.tx):>10}  "
                 f"PROCS {st_.nprocs:4d}  TRACE {self.trace:3.0f}%")
-        text = "  ░▒▓  ".join([live] + BULLETINS) + "  ░▒▓  "
+        text = "  //  ".join([live] + BULLETINS) + "  //  "
+        kick = " ニュース ▸ " if self.conf.get("kanji", True) else " NEWS ▸ "
+        kw = dw(kick)
         off = int(now * 13) % len(text)
-        view = (text[off:] + text)[: W - 4]
-        self.put(y, 0, "◤◢ ", self.c("pri", y, True))
-        self.put(y, 3, view, self.c("dim", y))
-        # colour the live block when visible
+        view = (text[off:] + text)[: W - kw - 1]
+        self.put(y, 0, kick, self.c("acc", y, True))
+        self.put(y, kw, view, self.c("dim", y))
+        for m in re.finditer("//", view):
+            self.put(y, kw + m.start(), "//", self.c("pri", y))
         i = view.find("CPU ")
         if i >= 0:
-            self.put(y, 3 + i, view[i:i + len(live)], self.c("pri", y))
-        self.put(y, W - 1, "◣", self.c("pri", y, True))
+            self.put(y, kw + i, view[i:i + len(live)], self.c("txt", y))
 
     def draw_neural_mini(self, y, x, now):
         """A small live neural-link readout: waveform, sync and trace."""
@@ -1504,11 +1664,14 @@ class Deck:
             lw = W
         elif not left:
             lw = 0
+        self._pnum = 0
         for names, x, w in ((left, 0, lw), (right, lw, W - lw)):
             if not names or w < 20:
                 continue
             y = top
             for name, h in self.alloc(names, bh, w):
+                self._pnum += 1
+                self._pn = self._pnum
                 getattr(self, "draw_" + {"procs": "proc_panel"}.get(name, name))(y, x, h, w, now)
                 y += h
 
@@ -1677,7 +1840,7 @@ class Deck:
 
     def draw_bio(self, y, x, h, w, now):
         st = self.stats
-        self.panel(y, x, h, w, "BIOMON", "VITALS", role="pri")
+        self.panel(y, x, h, w, "VITALS", "BIO", role="pri")
         ix, iw = x + 2, w - 4
         r = y + 1
         for name, t in st.temps[:3]:
@@ -1832,7 +1995,7 @@ class Deck:
             tag = f"SCROLL -{self.scroll} · PGDN"
         else:
             tag = "PGUP/PGDN SCROLL"
-        self.panel(y, x, h, w, "CONSOLE // NETWATCH FEED", tag, role="acc")
+        self.panel(y, x, h, w, "CONSOLE", tag, role="acc")
         ix, iw = x + 2, w - 4
         view = h - 2
         need = view + self.scroll
@@ -1918,11 +2081,16 @@ class Deck:
             if x + need > self.W - 1:
                 break
             self.put(y, x, f"{k}", self.inv("acc"))
-            self.put(y, x + len(k), f" {lab} ", self.c("txt", y))
+            self.put(y, x + len(k), f" {lab} ", self.c("dim", y))
             x += need
-        tail = f" {self.pal.name.upper()} "
-        if x + len(tail) < self.W:
-            self.put(y, self.W - len(tail) - 1, tail, self.c("dim", y))
+        # the corp still thinks it owns this machine
+        ghost = self.conf.get("fx", True) and int(self.now) % 29 in (0, 1) and int(self.now * 7) % 3
+        word = "GHOSTED" if ghost else "LOGGED"
+        tail = f"© 2077 ARASAKA // ALL ACTIVITY IS {word} "
+        if x + len(tail) + 2 < self.W:
+            tx = self.W - len(tail)
+            self.put(y, tx, tail, self.c("dim", y))
+            self.put(y, tx + len(tail) - len(word) - 1, word, self.c("acc" if ghost else "dim", y, ghost))
 
     # ---------------------------------------------------------------- overlays
     def box(self, title, hint="", w=None, h=None, role="acc"):
@@ -1931,23 +2099,35 @@ class Deck:
         h = min(h or H - 4, H - 2)
         x = (W - w) // 2
         y = (H - h) // 2
-        for yy in range(y, y + h):
-            self.put(yy, x, " " * w, self.c("txt", yy))
-        self.put(y, x, "╔" + "═" * (w - 2) + "╗", self.c(role, y, True))
-        for yy in range(y + 1, y + h - 1):
-            self.put(yy, x, "║", self.c(role, yy))
-            self.put(yy, x + w - 1, "║", self.c(role, yy))
-        self.put(y + h - 1, x, "╚" + "═" * (w - 2) + "╝", self.c(role, y + h - 1, True))
-        lab = f" ◢ {title} ◣ "
-        self.put(y, x + 3, lab, self.inv(role))
-        if hint:
-            hint = f" {hint} "
-            self.put(y + h - 1, x + max(2, w - len(hint) - 3), hint[: w - 4], self.c("dim", y + h - 1))
-        # drop shadow
+        # drop shadow first, then the plate
         for yy in range(y + 1, min(self.H, y + h + 1)):
             self.put(yy, x + w, "▒", self.c("deep", yy))
         if y + h < self.H:
             self.put(y + h, x + 1, "▒" * (w - 1), self.c("deep", y + h))
+        for yy in range(y, y + h):
+            self.put(yy, x, " " * w, self.c("txt", yy))
+        self.put(y, x + 1, " " * (w - 2), self.pal("txt", "tint"))
+        self.put(y, x, "┏", self.c(role, y, True))
+        self.put(y, x + w - 1, "┓", self.c(role, y, True))
+        for yy in range(y + 1, y + h - 1):
+            self.put(yy, x, "│", self.c("line", yy))
+            self.put(yy, x + w - 1, "│", self.c("line", yy))
+        self.put(y + 1, x, "┃", self.c(role, y + 1, True))
+        self.put(y + 1, x + w - 1, "┃", self.c(role, y + 1, True))
+        yb = y + h - 1
+        self.put(yb, x, "┗━━━" + "─" * (w - 8) + "━━━┛", self.c("line", yb))
+        self.put(yb, x, "┗━━━", self.c(role, yb, True))
+        self.put(yb, x + w - 4, "━━━┛", self.c(role, yb, True))
+        jp = JP_LABELS.get(title, "") if self.conf.get("kanji", True) else ""
+        cx = x + 3
+        if jp:
+            self.put(y, cx, jp, self.pal("acc", "tint"))
+            self.put(y, cx + dw(jp), " // ", self.pal("dim", "tint"))
+            cx += dw(jp) + 4
+        self.put(y, cx, title[: w - (cx - x) - 3], self.pal(role, "tint", True))
+        if hint:
+            hint = f" {hint} "
+            self.put(yb, x + max(5, w - len(hint) - 5), hint[: w - 10], self.c("dim", yb))
         return y, x, h, w
 
     # -- apps
@@ -2155,7 +2335,7 @@ class Deck:
         return procs
 
     def draw_procs(self):
-        y, x, h, w = self.box("PROCESS MANAGER // FLATLINE CONSOLE",
+        y, x, h, w = self.box("PROCESS MANAGER",
                               "↑↓ select  k SIGTERM  K SIGKILL  s sort  / filter  ESC close", role="pri")
         ov = self.ov
         procs = self.proc_list()
@@ -2307,9 +2487,12 @@ class Deck:
         rows += [("color", r, lab) for r, lab in ROLES]
         rows += [("sec", "TYPE", ""), ("font", "font", "Font family"), ("size", "font_size", "Font size")]
         rows += [("sec", "EFFECTS", "")]
+        rows += [("orn", "ornament", "Panel ornament")]
         rows += [("bool", k, lab) for k, lab in (("fx", "Glitches & animations"), ("scan", "Scanline rows"),
                                                  ("boot", "Boot sequence"), ("ticker", "News ticker"),
-                                                 ("neural", "Neural readout in top bar"))]
+                                                 ("neural", "Neural readout in top bar"),
+                                                 ("kanji", "Japanese labels"), ("toasts", "Toast notifications"),
+                                                 ("exact_colors", "Exact hex colors"))]
         rows += [("sec", "PANELS", "")]
         rows += [("panel", p, lab) for p, lab in PANELS.items()]
         rows += [("sec", "ACTIONS", ""), ("act", "save", "Save colors as a new theme"),
@@ -2322,16 +2505,17 @@ class Deck:
         if kind == "theme":
             return c["theme"] + ("  (custom)" if c["theme"] not in THEMES else "")
         if kind == "color":
-            n = self.pal.colors[key]
             th = c["theme"]
             mod = key in c.get("overrides", {}).get(th, {})
-            return f"{n:>3}  {c256_to_hex(n)}" + ("  *" if mod else "")
+            return f"{self.pal.hex[key]}  ·{self.pal.colors[key]:>3}" + ("  *" if mod else "")
         if kind == "font":
             return c.get("font") or "(terminal default)"
         if kind == "size":
             return f"{c.get('font_size', 13)} pt"
         if kind == "bool":
             return "ON" if c.get(key, True) else "OFF"
+        if kind == "orn":
+            return c.get("ornament", "brackets").upper()
         if kind == "panel":
             lay = c["layout"]
             return "LEFT" if key in lay["left"] else ("RIGHT" if key in lay["right"] else "OFF")
@@ -2371,7 +2555,7 @@ class Deck:
                 role = {"ON": "ok", "OFF": "deep", "LEFT": "acc", "RIGHT": "acc"}.get(val, "hi")
                 self.put(r, x + 36, val[: lw - 38], self.c(role, r, role != "deep"))
             if kind == "color":
-                self.put(r, x + 3 + lw - 5, "    ", self.pal.raw(self.pal.colors["txt"], self.pal.colors[key]))
+                self.put(r, x + 3 + lw - 5, "    ", self.pal.raw(self.pal.t["txt"], self.pal.t[key]))
         # scrollbar
         if len(rows) > lh:
             frac = top / max(1, len(rows) - lh)
@@ -2409,12 +2593,13 @@ class Deck:
         r = y + ph + 1
         if kind == "color":
             cur = self.pal.colors[key]
-            self.put(r, x, f"{label.upper()}  ·  ←→ step  ·  ENTER type #hex or 0-255", self.c("dim", r))
+            tip = "  ·  exact colors on" if self.pal.exact else ""
+            self.put(r, x, f"{label.upper()}  ·  ←→ step  ·  ENTER type #hex or 0-255{tip}", self.c("dim", r))
             n = max(4, min(32, (w - 2) // 2))
             start = max(0, min(256 - n, cur - n // 2))
             for i in range(n):
                 v = start + i
-                self.put(r + 1, x + i * 2, "  ", self.pal.raw(self.pal.colors["txt"], v))
+                self.put(r + 1, x + i * 2, "  ", self.pal.raw(self.pal.t["txt"], v))
                 if v == cur:
                     self.put(r + 2, x + i * 2, "▲▲", self.c("hi", r + 2, True))
             return
@@ -2423,7 +2608,9 @@ class Deck:
             "font": "←→ cycles installed monospace fonts, ENTER types any name. The NETDECK session and app-menu "
                     "launcher apply it (foot, kitty, alacritty). Use 'Apply font now' to see it.",
             "size": "←→ changes the size. Applied on relaunch.",
-            "bool": "ENTER or ←→ toggles.",
+            "bool": "ENTER or ←→ toggles. Exact hex colors works in foot, kitty, alacritty and GNOME Terminal; "
+                    "elsewhere the nearest 256-color match is used.",
+            "orn": "←→ cycles corner brackets, a barcode in the header, or nothing.",
             "panel": "ENTER toggles the panel. Columns and order live in ~/.config/netdeck/config.json → layout.",
             "act": "ENTER runs it.",
         }
@@ -2452,6 +2639,7 @@ class Deck:
             save_conf(self.conf)
             self.mode = "main"
             self.ok("settings saved")
+            self.toast("CONFIG WRITTEN", "~/.config/netdeck/config.json", "ok")
             return
         if k in (curses.KEY_UP, "k", curses.KEY_DOWN, "j", curses.KEY_PPAGE, curses.KEY_NPAGE):
             step = {curses.KEY_UP: -1, "k": -1, curses.KEY_DOWN: 1, "j": 1,
@@ -2495,7 +2683,7 @@ class Deck:
             self.pal.set(c)
             self.scr.clear()
         elif kind == "color":
-            self.set_color(key, (self.pal.colors[key] + d) % 256)
+            self.set_color(key, c256_to_hex((self.pal.colors[key] + d) % 256))
         elif kind == "font":
             fonts = self.mono_fonts()
             if fonts:
@@ -2505,8 +2693,23 @@ class Deck:
             c["font_size"] = max(6, min(40, int(c.get("font_size", 13)) + d))
         elif kind == "bool":
             c[key] = not c.get(key, True)
+            if key == "exact_colors":
+                self.set_exact(c[key])
+        elif kind == "orn":
+            opts = ["brackets", "barcode", "none"]
+            cur = c.get("ornament", "brackets")
+            c["ornament"] = opts[(opts.index(cur) + d) % 3 if cur in opts else 0]
         elif kind == "panel":
             self.toggle_panel(key)
+
+    def set_exact(self, on):
+        on = bool(on) and self.c256 and curses.can_change_color()
+        if not on and self.pal.exact:
+            sys.stdout.write("\x1b]104\x07")
+            sys.stdout.flush()
+        self.pal.exact = on
+        self.pal.set(self.conf)
+        self.scr.clear()
 
     def settings_commit(self, row, text):
         kind, key, _ = row
@@ -2514,7 +2717,7 @@ class Deck:
             return
         if kind == "color":
             try:
-                self.set_color(key, color_val(text))
+                self.set_color(key, to_hex(text))
             except ValueError:
                 self.err(f"'{text}' isn't a color - use #rrggbb or 0-255")
         elif kind == "font":
@@ -2530,13 +2733,20 @@ class Deck:
 
     def draw_confirm(self):
         q = self.confirm[0]
-        w = max(44, len(q) + 8)
-        y, x, h, w = self.box("CONFIRM", "", w=w, h=7, role="bad")
-        self.put(y + 2, x + (w - len(q)) // 2, q, self.c("hi", y + 2, True))
-        opts = "[ Y ] EXECUTE      [ N ] ABORT"
-        self.put(y + 4, x + (w - len(opts)) // 2, opts, self.c("txt", y + 4))
-        self.put(y + 4, x + (w - len(opts)) // 2 + 2, "Y", self.c("bad", y + 4, True))
-        self.put(y + 4, x + (w - len(opts)) // 2 + 21, "N", self.c("acc", y + 4, True))
+        w = min(self.W - 4, max(50, len(q) + 10))
+        y, x, h, w = self.box("CONFIRM", "", w=w, h=8, role="warn")
+        stripe = "".join("╱" if (i // 2) % 2 == 0 else " " for i in range(w - 2))
+        self.put(y + 1, x + 1, stripe, self.pal("bg", "warn", True))
+        lab = " !! AUTHORIZATION REQUIRED "
+        self.put(y + 1, x + (w - len(lab)) // 2, lab, self.pal("warn", "bg", True))
+        self.put(y + 3, x + max(2, (w - len(q)) // 2), q[: w - 4], self.c("txt", y + 3, True))
+        opts = "[ Y ] EXECUTE        [ N ] ABORT"
+        ox = x + (w - len(opts)) // 2
+        self.put(y + 5, ox, opts, self.c("dim", y + 5))
+        self.put(y + 5, ox + 2, "Y", self.c("bad", y + 5, True))
+        self.put(y + 5, ox + 6, "EXECUTE", self.c("txt", y + 5))
+        self.put(y + 5, ox + 23, "N", self.c("acc", y + 5, True))
+        self.put(y + 5, ox + 27, "ABORT", self.c("txt", y + 5))
 
     # ---------------------------------------------------------------- input
     def handle_key(self, k):
@@ -2789,6 +2999,7 @@ class Deck:
         self.children.append(p)
         self.log([("daemon deployed ▸ ", "txt"), (label, "hi"), (f"  [pid {p.pid}]", "dim")], tag="JACK-IN",
                  tag_role="ok")
+        self.toast("JACKED IN", f"{label[:36]}  //  pid {p.pid}", "ok")
         self.glitch(0.15)
 
     def reap(self):
@@ -2809,6 +3020,8 @@ class Deck:
         curses.def_prog_mode()
         curses.endwin()
         out = sys.stdout
+        if self.pal.exact:
+            out.write("\x1b]104\x07")  # give the child program the terminal's own palette
         if isinstance(banner, str):
             out.write("\x1b[0m\x1b[2J\x1b[H" + banner)
         elif banner:
@@ -2844,6 +3057,7 @@ class Deck:
             except (EOFError, KeyboardInterrupt):
                 pass
         curses.reset_prog_mode()
+        self.pal.reapply()
         try:
             curses.curs_set(0)
         except curses.error:
@@ -2852,6 +3066,7 @@ class Deck:
         role = "ok" if rc == 0 else "bad"
         self.log([("disconnected from ", "txt"), (label[:60], "hi"), (f"  exit {rc} · {dt:.1f}s", "dim")],
                  tag="JACK-OUT", tag_role=role)
+        self.toast("JACKED OUT", f"{label[:30]}  //  exit {rc}  //  {dt:.1f}s", role)
         self.glitch(0.3)
 
     def exec_capture(self, cmdline):
@@ -3071,7 +3286,7 @@ class Deck:
             ("PACKAGES", f"{pkgs} dpkg" if pkgs else "?"),
             ("ARSENAL", f"{len(self.catalog.desktop)} apps · {len(self.catalog.bins)} binaries"
                         if self.catalog.ready else "indexing..."),
-            ("STATUS", "OWNED BY ARASAKA → HIJACKED"),
+            ("OWNER", "████████████  //  corp record rewritten"),
         ]
         self.head("IDENTITY DOSSIER")
         for k, v in rows:
@@ -3097,6 +3312,7 @@ class Deck:
             return self.err(f"unknown skin '{name}' - options: {', '.join(names)}")
         self.set_theme(name)
         self.ok(f"skin loaded: {name}")
+        self.toast("SKIN LOADED", name.upper(), "acc")
 
     def set_theme(self, name):
         self.conf["theme"] = name
@@ -3112,7 +3328,7 @@ class Deck:
         base = self.conf["theme"]
         base = self.conf.get("themes", {}).get(base, {}).get("base", base) if base not in THEMES else base
         theme = {"base": base}
-        theme.update({r: self.pal.colors[r] for r, _ in ROLES})
+        theme.update({r: self.pal.hex[r] for r, _ in ROLES})
         self.conf.setdefault("themes", {})[name] = theme
         self.set_theme(name)
         self.ok(f"theme saved as '{name}' - it's in ~/.config/netdeck/config.json")
@@ -3265,6 +3481,7 @@ class Deck:
                 self.catalog.load()
                 hit = self.market_find(a.key)
                 if hit and hit.kind != "get":
+                    self.toast("INSTALLED", f"{a.name}  //  run: {' '.join(hit.argv)}", "ok", 5)
                     self.notes.append(([("installed ▸ ", "txt"), (a.name, "hi"), ("  run it: ", "dim"),
                                         (" ".join(hit.argv), "acc")], "txt", "ARSENAL", "ok"))
                 else:
@@ -3288,6 +3505,7 @@ class Deck:
         self.conf["dock"] = items
         save_conf(self.conf)
         self.ok(f"pinned '{rest}' to dock slot {len(items)}  (Alt+{len(items)})")
+        self.toast("DOCK", f"slot {len(items)}  //  {rest}  //  ALT+{len(items)}", "acc")
 
     def cmd_unpin(self, args, rest):
         items = list(self.dock_items())
@@ -3316,8 +3534,7 @@ class Deck:
         if not args:
             self.head(f"COLORS · theme {self.conf['theme']}  (color <role> <#hex|0-255> · color reset)")
             for r, lab in ROLES:
-                n = self.pal.colors[r]
-                self.log([(f"  {r:<5}", "acc"), (f"{n:>4}  {c256_to_hex(n)}  ", "txt"), (lab, "dim")])
+                self.log([(f"  {r:<5}", "acc"), (f"{self.pal.hex[r]}  ", "txt"), (lab, "dim")])
             return
         if args[0] == "reset":
             self.conf.get("overrides", {}).pop(self.conf["theme"], None)
@@ -3327,12 +3544,12 @@ class Deck:
         if len(args) < 2 or args[0] not in roles:
             return self.err("usage: color <role> <#hex|0-255>   roles: " + " ".join(roles))
         try:
-            val = color_val(args[1])
+            val = to_hex(args[1])
         except ValueError:
             return self.err(f"'{args[1]}' isn't a color - use #rrggbb or 0-255")
         self.set_color(args[0], val)
         save_conf(self.conf)
-        self.ok(f"{args[0]} → {val} ({c256_to_hex(val)})")
+        self.ok(f"{args[0]} → {val}")
 
     def set_color(self, role, val):
         th = self.conf["theme"]
@@ -3451,163 +3668,221 @@ class Deck:
         for y in range(self.H):
             self.fill(y, 0, self.W)
 
+    def boot_frame(self, left, right="SECTOR 7  //  SECURE NODE", foot="ALL ACTIVITY IS LOGGED"):
+        """The corp frame every boot screen sits in (top and bottom rules, like a case file)."""
+        H, W = self.H, self.W
+        self.scr.erase()
+        self.clear_bg()
+        self.put(1, 3, left[: W - 6], self.c("dim", 1))
+        if len(left) + len(right) + 10 < W:
+            self.put(1, W - 3 - dw(right), right, self.c("dim", 1))
+        self.put(2, 3, "─" * (W - 6), self.c("line", 2))
+        self.put(H - 3, 3, "─" * (W - 6), self.c("line", H - 3))
+        lf = "© 2077 ARASAKA CORPORATION  //  ALL RIGHTS RESERVED"
+        self.put(H - 2, 3, lf[: W - 8], self.c("dim", H - 2))
+        if len(lf) + len(foot) + 10 < W:
+            self.put(H - 2, W - 3 - len(foot), foot, self.c("dim", H - 2))
+
+    def type_line(self, y, x, text, role, sp, bold=False, cps=260):
+        step = max(1, int(cps * 0.012))
+        for i in range(0, len(text) + step, step):
+            self.put(y, x, text[:i], self.c(role, y, bold))
+            self.scr.refresh()
+            if self.wait(0.012 * sp):
+                self.put(y, x, text, self.c(role, y, bold))
+                return True
+        return False
+
     def boot(self):
         H, W = self.H, self.W
-        if W < 60 or H < 20:
+        if W < 70 or H < 24:
             return
-        fast = self.args.fast
-        sp = 0.35 if fast else 1.0
+        sp = 0.35 if self.args.fast else 1.0
+        jpk = self.conf.get("kanji", True)
         # CRT power-on: a line blooming into a screen
         cy = H // 2
         for i in range(1, 9):
             self.scr.erase()
-            for y in range(H):
-                self.put(y, 0, " " * W, self.pal("txt", "bg"))
+            self.clear_bg()
             half = int(W / 2 * i / 8)
-            self.put(cy, W // 2 - half, "━" * (half * 2), self.pal("acc", "bg", True))
+            self.put(cy, W // 2 - half, "━" * (half * 2), self.c("acc", cy, True))
             self.scr.refresh()
             if self.wait(0.018 * sp):
                 return
-        for i in range(1, 6):
-            hh = int(H / 2 * i / 5)
-            for y in range(cy - hh, cy + hh):
-                self.put(y, 0, "░" * W if i < 5 else " " * W, self.pal("dim", "bg"))
-            self.scr.refresh()
-            if self.wait(0.02 * sp):
-                return
-        # BIOS
-        self.scr.erase()
-        self.clear_bg()
+        # ---- 1. power-on self test
+        title = "ARASAKA SECURE FIRMWARE v7.7.2  //  " + ("起動シーケンス" if jpk else "BOOT SEQUENCE")
+        self.boot_frame(title)
+        x0, y = 5, 4
+        self.put(y, x0, ("診断  //  " if jpk else "") + "POWER-ON SELF TEST", self.c("acc", y, True))
+        y += 2
         st = self.stats
-        y = 1
-        hdr = "ARASAKA CORPORATION  //  SECURE FIRMWARE v7.77.2077  //  CLASSIFIED: BLACK"
-        self.put(y, 2, hdr[: W - 4], self.c("pri", y, True))
-        self.put(y + 1, 2, ("━" * len(hdr))[: W - 4], self.c("dim", y + 1))
-        self.scr.refresh()
-        y += 3
         total_kb = st.mem["total"] // 1024
         for i in range(0, 21):
-            v = total_kb * i // 20
-            self.put(y, 2, f"MEMORY TEST : {v:>12,} KB", self.c("txt", y))
+            self.put(y, x0, f"MEMORY ......... {total_kb * i // 20:>12,} KB", self.c("txt", y))
             self.scr.refresh()
-            if self.wait(0.02 * sp):
+            if self.wait(0.018 * sp):
                 return
-        self.put(y, 32, " OK", self.c("ok", y, True))
+        self.put(y, x0 + 36, "[ OK ]", self.c("ok", y, True))
         y += 1
         checks = [
-            (f"CPU         : {cpu_model()[:48]} x{st.ncpu}", "OK", "ok"),
-            (f"KERNEL      : {os.uname().release}", "OK", "ok"),
-            ("NEURAL PORT : interface bus 0x7F", "DETECTED", "acc"),
-            ("OPTICS      : retinal overlay driver", "OK", "ok"),
-            ("ICE LAYER 1 : perimeter firewall", "ACTIVE", "warn"),
-            ("ICE LAYER 2 : black ICE sentinel", "ACTIVE", "warn"),
-            ("TELEMETRY   : corp beacon -> arasaka.subnet07", "ONLINE", "warn"),
-            ("OWNER       : ARASAKA CORP. ASSET #77-0451", "LOCKED", "bad"),
+            (f"PROCESSOR ...... {cpu_model()[:40]} ×{st.ncpu}", "OK", "ok"),
+            (f"KERNEL ......... {os.uname().release}", "OK", "ok"),
+            ("NEURAL PORT .... interface bus 0x7F", "DETECTED", "acc"),
+            ("OPTICS ......... retinal overlay driver", "OK", "ok"),
+            ("ICE ............ perimeter + black ICE sentinel", "ARMED", "warn"),
+            ("TELEMETRY ...... beacon -> arasaka.subnet07", "ONLINE", "warn"),
         ]
+        cw = min(W - 20, 64)
         for text, res, role in checks:
-            self.put(y, 2, text[: W - 20], self.c("txt", y))
+            self.put(y, x0, text[: cw - 2], self.c("txt", y))
             self.scr.refresh()
-            if self.wait(0.07 * sp):
+            if self.wait(0.06 * sp):
                 return
-            self.put(y, min(W - 14, 60), f"[ {res} ]", self.c(role, y, True))
+            self.put(y, x0 + cw, f"[ {res} ]", self.c(role, y, True))
             y += 1
+        owner_y = y
+        self.put(y, x0, "OWNER .......... ARASAKA CORP.  ASSET #77-0451", self.c("txt", y))
+        self.put(y, x0 + cw, "[ LOCKED ]", self.c("bad", y, True))
         self.scr.refresh()
-        if self.wait(0.3 * sp):
+        if self.wait(0.45 * sp):
             return
-        # intrusion
-        y += 1
-        for i in range(6):
-            msg = " !! UNAUTHORIZED NEURAL HANDSHAKE DETECTED !! "
-            self.put(y, 2, msg, self.inv("bad") if i % 2 == 0 else self.c("bad", y, True))
-            self.scr.refresh()
-            if self.wait(0.09 * sp):
-                return
+        # ---- 2. handshake + ICE decrypt
         y += 2
-        steps = [
-            "injecting daemon GHOSTKEY.EXE into firmware",
-            "spoofing biometric owner hash",
-            "suffocating ICE layer 1 + 2",
-            "blackholing corp telemetry beacon",
-            "rewriting asset ownership record",
-            "routing uplink through 7-hop proxy chain",
-        ]
-        bw = 24
-        hexx = min(W - 22, 72)
-        for s in steps:
-            if y >= H - 3:
-                break
-            self.put(y, 2, "> ", self.c("pri", y, True))
-            bx = min(50, hexx - bw - 6)
-            self.put(y, 4, f"{s:<44}"[: bx - 6], self.c("txt", y))
-            for j in range(bw + 1):
-                self.put(y, bx, "[", self.c("dim", y))
-                self.bar(y, bx + 1, bw, j / bw * 100, "acc")
-                self.put(y, bx + bw + 1, "]", self.c("dim", y))
-                # hex rain on the right
-                for hy in range(3, H - 1):
-                    if random.random() < 0.3:
-                        self.put(hy, hexx + 2, " ".join(f"{random.randrange(256):02X}" for _ in range((W - hexx - 3) // 3)),
-                                 self.c(random.choice(["deep", "dim", "deep", "pri"]), hy))
-                self.scr.refresh()
-                if self.wait(0.012 * sp):
-                    return
-            self.put(y, bx + bw + 3, "DONE", self.c("ok", y, True))
-            y += 1
-        if y < H - 2:
-            self.put(y + 1, 2, "ICE STATUS: FLATLINED.   OWNERSHIP: TRANSFERRED.", self.c("hi", y + 1, True))
+        stripe = "".join("╱" if (i // 2) % 2 == 0 else " " for i in range(min(W - 10, 72)))
+        self.put(y, x0, stripe, self.pal("bg", "warn", True))
+        msg = " !! NEURAL HANDSHAKE  //  UNREGISTERED OPERATOR "
+        self.put(y, x0 + 4, msg, self.pal("warn", "bg", True))
         self.scr.refresh()
         if self.wait(0.5 * sp):
             return
-        # logo decode
+        y += 2
+        self.put(y, x0, ("侵入  //  " if jpk else "") + "ICE DECRYPT", self.c("acc", y, True))
+        gy, gx = y + 2, x0
+        codes = ["1C", "55", "BD", "E9", "7A", "FF"]
+        rnd = random.Random()
+        n = 6
+        grid = [[rnd.choice(codes) for _ in range(n)] for _ in range(n)]
+        if gy + n + 3 >= H - 3:
+            n = max(3, H - 7 - gy)
+        for r in range(n):
+            for c in range(6):
+                self.put(gy + r, gx + c * 4, grid[r][c], self.c("dim", gy + r))
+        bx = gx + 30
+        self.put(gy, bx, "BUFFER", self.c("dim", gy))
+        self.put(gy + 1, bx, "[" + " __" * 5 + " ]", self.c("line", gy + 1))
+        self.scr.refresh()
+        r, c, horiz = 0, rnd.randrange(6), False
+        picked = []
+        for k in range(5):
+            # sweep along the active row / column, then lock a cell
+            for s_ in range(6):
+                rr, cc = (r, s_) if horiz else (s_ % n, c)
+                self.put(gy + rr, gx + cc * 4, grid[rr][cc], self.pal("bg", "acc", True))
+                self.scr.refresh()
+                if self.wait(0.022 * sp):
+                    return
+                self.put(gy + rr, gx + cc * 4, grid[rr][cc],
+                         self.c("hi" if (rr, cc) in picked else "dim", gy + rr, (rr, cc) in picked))
+            if horiz:
+                c = rnd.randrange(6)
+            else:
+                r = rnd.randrange(n)
+            picked.append((r, c))
+            self.put(gy + r, gx + c * 4, grid[r][c], self.c("hi", gy + r, True))
+            self.put(gy + 1, bx + 2 + k * 3, grid[r][c], self.c("acc", gy + 1, True))
+            self.scr.refresh()
+            horiz = not horiz
+            if self.wait(0.08 * sp):
+                return
+        self.put(gy + 3, bx, "DAEMONS", self.c("dim", gy + 3))
+        steps = ["GHOSTKEY.exe  ->  firmware", "MIRROR.dmn   ->  biometric owner hash",
+                 "BLACKOUT.dmn ->  corp telemetry beacon", "PROXY.chain  ->  7 hops"]
+        for i, st_ in enumerate(steps):
+            yy = gy + 4 + i
+            if yy >= H - 4:
+                break
+            self.put(yy, bx, st_, self.c("txt", yy))
+            bw = 14
+            px = bx + 40
+            if px + bw + 8 >= W:
+                px = W - bw - 10
+            for j in range(bw + 1):
+                self.bar(yy, px, bw, j / bw * 100, "acc")
+                self.scr.refresh()
+                if self.wait(0.008 * sp):
+                    return
+            self.put(yy, px + bw + 2, "DONE", self.c("ok", yy, True))
+        # the corp record quietly rewritten
+        self.put(owner_y, x0, "OWNER .......... " + "█" * 30, self.c("txt", owner_y))
+        self.put(owner_y, x0 + cw, "[ REWRITTEN ]", self.c("ok", owner_y, True))
+        self.scr.refresh()
+        if self.wait(0.6 * sp):
+            return
+        # ---- 3. access
         self.logo_reveal(sp)
 
     def logo_reveal(self, sp=1.0):
         H, W = self.H, self.W
+        jpk = self.conf.get("kanji", True)
+        self.boot_frame("NETDECK-OS v" + VERSION + "  //  " + ("接続" if jpk else "LINK"),
+                        f"NODE 0x{self.node}  //  SECTOR 7", "ALL ACTIVITY IS GHOSTED")
+        cy = H // 2
+        # progress line: red, then green
+        pw = min(60, W - 20)
+        px = (W - pw) // 2
+        label = "AUTHENTICATING OPERATOR_"
+        self.put(cy - 1, (W - len(label)) // 2, label, self.c("pri", cy - 1, True))
+        self.put(cy + 1, px, "▬" * pw, self.c("line", cy + 1))
+        for i in range(pw + 1):
+            self.put(cy + 1, px, "▬" * i, self.c("pri", cy + 1, True))
+            if i % 3 == 0:
+                self.scr.refresh()
+                if self.wait(0.012 * sp):
+                    break
+        grant = "ACCESS GRANTED  //  WELCOME, OPERATOR"
+        self.put(cy - 1, 0, " " * W, self.c("txt", cy - 1))
+        self.put(cy - 1, (W - len(grant)) // 2, grant, self.c("ok", cy - 1, True))
+        self.put(cy + 1, px, "▬" * pw, self.c("ok", cy + 1, True))
+        self.scr.refresh()
+        if self.wait(0.7 * sp):
+            return
+        # logo decodes out of noise
         lw = len(LOGO[0])
-        big = W >= lw + 4 and H >= 16
+        big = W >= lw + 6 and H >= 24
         lines = LOGO if big else ["N E T D E C K"]
         lx = (W - len(lines[0])) // 2
-        ly = H // 2 - len(lines) // 2 - 2
-        frames = 22
+        ly = H // 2 - len(lines) // 2 - 1
+        kick = ("端末  //  " if jpk else "") + "NETRUNNER CYBERDECK"
+        sub = ("ネットデッキ  //  " if jpk else "") + f"OPERATOR {self.user.upper()}  //  NODE 0x{self.node}"
+        frames = 20
         for f in range(frames + 1):
-            self.scr.erase()
-            self.clear_bg()
+            self.boot_frame("NETDECK-OS v" + VERSION + "  //  " + ("接続" if jpk else "LINK"),
+                            f"NODE 0x{self.node}  //  SECTOR 7", "ALL ACTIVITY IS GHOSTED")
             keep = f / frames
+            self.put(ly - 2, (W - dw(kick)) // 2, kick, self.c("acc", ly - 2))
             for i, line in enumerate(lines):
-                y = ly + i
+                yy = ly + i
                 for j, ch in enumerate(line):
                     if ch == " ":
                         continue
                     if random.random() > keep:
-                        self.put(y, lx + j + random.choice((0, 0, 0, 1, -1)), random.choice(GLITCH + KATA),
-                                 self.c(random.choice(["pri", "acc", "mag", "deep"]), y))
+                        self.put(yy, lx + j + random.choice((0, 0, 0, 1, -1)), random.choice(GLITCH + KATA),
+                                 self.c(random.choice(["pri", "acc", "line", "deep"]), yy))
                     else:
-                        role = "pri" if ch == "█" else "deep" if big else "pri"
-                        self.put(y, lx + j, ch, self.c(role, y, ch == "█"))
+                        self.put(yy, lx + j, ch, self.c("pri" if ch == "█" else "line", yy, ch == "█"))
+            if f == frames:
+                self.put(ly + len(lines) + 1, (W - dw(sub)) // 2, sub, self.c("txt", ly + len(lines) + 1))
             self.scr.refresh()
             if self.wait(0.035 * sp):
                 return
-        sub1 = "NODE HIJACKED  ·  ASSET #77-0451  ·  OWNERSHIP TRANSFERRED"
-        sub2 = f"welcome back, {self.user}. the net is yours."
-        y = ly + len(lines) + 1
-        self.put(y, (W - len(sub1)) // 2, "", 0)
-        for i in range(len(sub1) + 1):
-            self.put(y, (W - len(sub1)) // 2, sub1[:i], self.c("acc", y, True))
-            self.scr.refresh()
-            if self.wait(0.008 * sp):
-                return
-        self.put(y + 2, (W - len(sub2)) // 2, sub2, self.c("hi", y + 2))
-        tag = f"NETDECK//OS v{VERSION}"
-        self.put(y + 4, (W - len(tag)) // 2, tag, self.c("dim", y + 4))
-        self.scr.refresh()
-        if self.wait(1.1 * sp):
+        if self.wait(1.0 * sp):
             return
         # tear-away
-        for _ in range(5):
-            for _k in range(12):
+        for _ in range(4):
+            for _k in range(10):
                 yy = random.randrange(H)
                 try:
-                    self.scr.chgat(yy, 0, W, self.pal(random.choice(["pri", "acc", "mag"]), "bg", True, True))
+                    self.scr.chgat(yy, 0, W, self.pal(random.choice(["pri", "acc", "line"]), "bg", True, True))
                 except curses.error:
                     pass
             self.scr.refresh()
@@ -3694,8 +3969,8 @@ class Deck:
         if self.conf.get("boot", True) and not self.args.no_boot:
             self.boot()
         self.scr.clear()
-        self.log([("NETDECK//OS ", "pri"), (f"v{VERSION} ", "dim"), ("online. node hijacked, ", "txt"),
-                  ("corp ICE flatlined.", "ok")], tag="SYSTEM", tag_role="pri")
+        self.log([("link established ", "txt"), ("// ", "pri"), (f"operator {self.user} ", "acc"), ("// ", "pri"),
+                  ("corp ICE flatlined", "ok")], tag="SYSTEM", tag_role="pri")
         self.log([("type ", "dim"), ("help", "hi"), (" for the codex · ", "dim"), ("apps", "hi"),
                   (" (F2) to browse your arsenal · ", "dim"), ("shell", "hi"), (" (F4) for a raw link", "dim")],
                  tag="SYSTEM", tag_role="pri")
@@ -3761,7 +4036,7 @@ class Deck:
 def term_opts(term, conf):
     """Terminal options that apply the deck's font and background (used by netdeck-session)."""
     cols = resolve_theme(conf)
-    bg, fg = c256_to_hex(cols["bg"]), c256_to_hex(cols["txt"])
+    bg, fg = cols["bg"], cols["txt"]
     font = (conf.get("font") or "").strip()
     try:
         size = max(6, min(40, int(conf.get("font_size", 13))))
@@ -3839,8 +4114,8 @@ def main():
         pass
     if result["code"] == 75:  # relaunching the terminal window
         sys.exit(75)
-    sys.stdout.write("\x1b[0m")
-    t = resolve_theme(load_conf())
+    sys.stdout.write("\x1b[0m\x1b]104\x07")  # reset any palette slots the deck redefined
+    t = {r: hex_to_256(h) for r, h in resolve_theme(load_conf()).items()}
     print(f"{ansi256(t['pri'])}◢ NETDECK{ansi256(t['dim'])} // jacked out. stay frosty, choom.\x1b[0m")
     sys.exit(result["code"] or 0)
 

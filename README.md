@@ -43,12 +43,19 @@ login straight into the deck's boot sequence.
 
 Press **F8** (or type `settings`) for the tuning screen, with a live preview:
 
-- **Themes:** `netrunner`, `arasaka`, `netwatch`, `toxic`, `afterlife`, `amber`, plus any you save yourself.
-- **Every color:** 12 roles (frames, highlights, text, background, scanlines, alerts…). Step with ←/→ or type a
-  `#hex` value or a 0–255 number. **Save as new theme** keeps your mix.
+- **18 themes**, built on the palettes from RunDeck and SixthDeck:
+  - `netrunner` (default): midnight blue-black, red structure, cyan data, yellow alerts
+  - `arasaka`: blood-black, corp red, chrome white
+  - `sodium`, `matrix`, `neon`, `blackout`, `chrome`, `ronin`, `blood`, `ghost`, `astral`, `resonance`, `hazard`,
+    `noir`, `spraypaint`, `jade`, `rust`, `terminal`
+- **Every color:** 14 roles, including structure, data, text, borders, header bars, background and alerts. Step with
+  ←/→ or type a `#hex` value. **Save as new theme** keeps your mix.
+- **Exact colors:** on terminals that allow it (foot, kitty, alacritty, GNOME Terminal), the deck loads your exact hex
+  values into the terminal's palette. Elsewhere it uses the nearest of the 256 standard colors.
 - **Font family and size:** cycle through your installed monospace fonts. The NETDECK session and the app-menu
   launcher apply them to the terminal, and **Apply font now** restarts the window instantly.
-- **Effects:** glitches, scanlines, boot sequence, news ticker, and the small neural-link readout in the top bar.
+- **Look and effects:** panel ornament (corner brackets, barcode or none), Japanese labels, glitches, scanlines,
+  boot sequence, news ticker, neural readout and toast notifications.
 - **Panels:** turn any panel on or off, including CPU, memory, storage, network, vitals, processes, dock and console,
   plus the optional big neural-link and datastream panels.
 

@@ -88,6 +88,9 @@ if (( SESSION )); then
   if command -v fc-list >/dev/null && ! fc-list | grep -qi "JetBrains Mono"; then
     pkgs+=(fonts-jetbrains-mono)
   fi
+  if command -v fc-list >/dev/null && ! fc-list | grep -qi "Noto Sans CJK"; then
+    pkgs+=(fonts-noto-cjk)   # the Japanese labels
+  fi
   if (( ${#pkgs[@]} )); then
     say "installing ${cyan}${pkgs[*]}${rst} (sudo)"
     sudo apt-get install -y "${pkgs[@]}"
