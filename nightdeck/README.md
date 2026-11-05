@@ -1,0 +1,71 @@
+# Nightdeck // Field Terminal
+
+A keyboard-driven terminal dashboard for Raspberry Pi 3 Model B and Raspberry Pi OS Lite (Debian 13/Trixie, 32-bit). It runs as your own user on the Pi console or over SSH. The app uses Python's standard library and curses. It starts no background services and needs no desktop, browser engine, pip packages or database.
+
+## Deploy from Ubuntu
+
+Download **nightdeck.tar.gz** into Ubuntu's Downloads folder. Run these on Ubuntu, one at a time:
+
+```sh
+cd ~/Downloads
+tar -tzf nightdeck.tar.gz
+scp nightdeck.tar.gz deck@nightdeck.local:~/
+ssh deck@nightdeck.local
+```
+
+If your network doesn't resolve the hostname, use your Pi's current IP address instead. Keep normal SSH host key verification enabled. After logging into the Pi, run:
+
+```sh
+cd ~
+tar -xzf nightdeck.tar.gz
+cd nightdeck
+./setup.sh
+~/.local/bin/nightdeck
+```
+
+Setup uses sudo for Debian packages only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano and the w3m text browser, then tries micro. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves the login shell and startup files alone. It replaces only the Nightdeck executable. To remove the executable, delete `~/.local/bin/nightdeck`.
+
+## Look
+
+Nightdeck v2 has the same tools as before, with a livelier cyberdeck interface modeled on the DeckMessages terminal and the Cyberdeck Zsh banner:
+
+- **Boot sequence.** A glitch-in logo and `[ OK ]`/`[ !! ]` readouts from the real machine: kernel, temperature, memory, network link, news cache and repositories. It lasts about two seconds, and any key skips it.
+- **Dashboard.** A header with a pulsing link beacon and clock, a glitching block-letter logo, a boxed module list, and a vitals panel. The panel has live CPU, RAM, temperature and disk meters, network throughput, Wi-Fi signal, and a scrolling CPU trace. A **WIRE** ticker along the bottom scrolls cached headlines.
+- **Screens.** Titles decrypt in when a screen opens. Menus have a highlight bar, a position counter and scroll markers. Text views have a scrollbar. Git output is colored: additions green, removals red, hunks cyan, untracked files red. News refresh runs behind an uplink animation, and leaving prints `CONNECTION TERMINATED`.
+- **Lightweight.** It's still pure standard-library Python and curses. Animation redraws about seven times a second, and curses sends only changed cells, which is cheap on a Pi 3B even over SSH. Turn **Effects** off in Settings for a static screen that updates once a second.
+
+## Controls and display
+
+The dashboard borrows the split navigation, clock and command prompt from [DeckMessages](https://github.com/Eidhaart/DeckMessages). On wider terminals, numbered modules sit beside live local vitals. On smaller terminals, a one-line CPU, RAM and temperature readout sits above the scrolling module list. Modules use the full width for diffs, headlines and other text.
+
+- Press **1–9** to open a dashboard module directly and **0** to jack out (exit). Or press **/** and type a command such as `git`, `news` or `zsh`. **Tab** completes the name. Use **/help** for the command list.
+
+- **Up/Down** or **j/k** moves. **Enter** selects. **Esc** goes back and exits from the home screen. In a text view, **Page Up/Down** scrolls by page.
+- A compact terminal around **80 columns × 24 rows** fits an 800×480 display with an appropriate font. Menus scroll at smaller sizes and adapt when resized. The app uses the terminal's character grid and does not change the Pi's display settings.
+- The default Cyberdeck palette matches the bundled Zsh theme. Colors in order: `#FF003C`, `#FFEE08`, `#00FFFF`, `#1DED83`, `#FAFAFA`, `#0E0E0E`. Curses programs these RGB values when the terminal advertises a mutable 256-color palette. Otherwise it uses available approximations, including the Linux console's basic colors. Let SSH forward your real terminal type.
+- Micro normally saves with **Ctrl+S** and exits with **Ctrl+Q**. Nano saves with **Ctrl+O**, then **Enter**, and exits with **Ctrl+X**.
+
+## Settings
+
+- **Settings** (**9** or `/settings`) lets you pick Cyberdeck, Amber, Ice or a custom palette, with swatches of the current colors. Edit any color role using a six-digit hex value. Preferences apply immediately and are saved in `${XDG_CONFIG_HOME:-~/.config}/nightdeck/settings.json`. Basic-color terminals use the standard fallback palette.
+- **Effects** turns animation on or off: glitch, ticker scroll, title decrypt and the blinking cursor. **Boot sequence** turns the startup animation on or off.
+- **Glyphs** sets which characters are used for borders and meters. **Auto** uses full Unicode in terminal emulators, the VGA-safe set the Linux console font always has (`TERM=linux`, the Pi's own screen), and plain ASCII if the locale isn't UTF-8. Cycle to **Console** or **ASCII** if any symbol shows as a diamond or box.
+- **Connect to Wi-Fi** opens NetworkManager's terminal picker with sudo. Select the network, enter its password in the picker, and return to Nightdeck. If the picker is missing, install `network-manager` while connected. Use the Pi console when switching the Wi-Fi that carries your SSH session. The Pi 3B requires a 2.4 GHz phone hotspot.
+
+## Tools
+
+- **Git workspace.** Clone HTTPS or SSH repositories into `~/repos`, or open an existing repository/worktree by its root path. View status, working and staged diffs, and branches. Edit a file, stage a literal path relative to the repo root, review the staged diff, and commit using Git's configured editor. Set `git config --global core.editor micro` (or `nano`) if you want the same editor for commit messages. Git may ask for your author name and email on the first commit.
+- **Push.** Select a configured remote such as `origin`. The preview shows the resolved push destination and an explicit refspec for the checked-out branch. Push updates the branch of the same name, without force or automatic upstream configuration. The app requires one push URL. If the remote rejects the update, review and reconcile the histories through normal Git commands.
+- **Authentication.** Use an existing SSH agent/key or Git credential helper. Enter HTTPS URLs without credentials or query strings. Nightdeck stores no credentials and disables inherited Git tracing for commands it runs. Git, your configured helpers/hooks, and SSH retain their normal behavior. Use trusted repositories and review staged content before committing or pushing. Diff views display your changes on screen.
+- **Notes and quick edit.** Notes are plain text under `${XDG_DATA_HOME:-~/.local/share}/nightdeck/notes`. New note names without extensions get `.md`. Quick edit starts in your home directory. The browser skips symlinks and Git metadata. An editor opens a new path for you to save.
+- **Zsh.** Run `./setup-oh-my-zsh.sh` from the extracted directory to enable your Cyberdeck prompt, startup banner and `jack-in` command in the Nightdeck Zsh menu. Setup reuses `~/.oh-my-zsh` or fetches a shallow copy from upstream GitHub. It writes a dedicated profile under `${XDG_CONFIG_HOME:-~/.config}/nightdeck/zsh`, so your regular Zsh configuration and login shell are preserved. The profile loads the Git plugin and disables automatic Oh My Zsh updates. The bundled Ptyxis palette is available for manual import on Ubuntu.
+- **System and SSH.** Check uptime, load, memory, disk and CPU temperature when available. Connect using a hostname or an alias in your SSH config, edit that config, or inspect loaded agent identities.
+- **News wire.** Select a publisher and choose **Refresh from publisher**. SVT provides Swedish headlines, Sveriges Radio Ekot provides broadcast headlines and article links, and BBC News and The Guardian provide world headlines. Choose a headline for a text view of the publisher's feed summary and link when supplied. After closing the summary, choose **Open in text browser** to visit the publisher through w3m. Press **q**, then confirm, to return. The page depends on network access and what the publisher serves to a text browser. Caches live under `${XDG_CACHE_HOME:-~/.cache}/nightdeck`, one file per publisher, and remain available offline after a successful refresh. Failed refreshes preserve the last good cache. Each source has a 2 MiB fetch limit and retains up to 50 entries.
+- **Character sheets.** Reserved menu entry.
+
+## Validation
+
+Developers can run `python3 tests/smoke.py`, which needs `pip install pyte`. It drives the app in a pseudo-terminal at 80×24 and 42×12, on xterm, on the Linux console and under a C locale, and checks git diffs, the ticker, settings and a clean exit.
+
+
+The release is designed for Python 3 on Linux and uses no architecture-specific bundled binaries. Local validation covers archive extraction, repeat installation, terminal navigation and core application paths. The physical Pi, its display and your Git credentials need their first check after deployment.
