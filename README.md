@@ -20,6 +20,12 @@ DECK//MSG   # Nyx                                         ● ONLINE  22:01:02
   VM, set up with one command. Images, emotes, unread counts and read receipts work.
 - **Demo mode:** a built-in offline backend with fictional contacts for trying the UI with no setup.
 
+## Bonus: NETDECK//OS
+
+[`cyberdeck/`](cyberdeck/README.md) holds a standalone, dependency-free terminal dashboard in the same style. It turns an
+Ubuntu terminal into a hijacked-corp cyberdeck, with live telemetry, a categorized launcher for every installed
+program, a command console and a drop-to-shell mode. Run `python3 cyberdeck/netdeck.py`.
+
 ## Why a bridge?
 
 Meta has no public API for personal Messenger accounts. DeckMessages is a [Matrix](https://matrix.org) client,
