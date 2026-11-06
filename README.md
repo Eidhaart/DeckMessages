@@ -58,6 +58,22 @@ This uses a small root helper, `/usr/local/sbin/netdeck-switch-root`, which does
 | `./install.sh --uninstall` | removes everything, including the login session |
 | `python3 netdeck.py` | run it once without installing |
 
+## Live news (F6)
+
+The ticker and the **NEWSFEED 報道** panel show real headlines, alternating Swedish and world news:
+
+| Sverige | World |
+|---|---|
+| SVT Nyheter, Ekot (Sveriges Radio), DN, Aftonbladet, Expressen | BBC World, The Guardian, Al Jazeera |
+
+Press **F6** (or type `news`) for the reader. It has tabs for all, Sweden and world, and shows a summary of the selected
+story. **Enter** downloads the article and shows the full text inside the deck, **o** opens it in your browser, and
+**r** refreshes. Feeds refresh every 15 minutes in the background, and new headlines pop up as a toast. The last
+fetch is cached, so headlines appear instantly at boot and work offline.
+
+Change the sources with `news sources`, `news add <rss url> [se|world] [name]`, `news rm <n>` and `news reset`.
+Settings (F8) turns live news off. If you've customized your layout, add the panel with `panel news on`.
+
 ## Cyberpunk zsh (oh-my-zsh)
 
 `zsh/` styles your everyday terminal to match the deck: oh-my-zsh, a two-line HUD prompt, and themed syntax
@@ -80,7 +96,10 @@ highlighting, autosuggestions and fzf.
   long slow commands took, and the time.
 - **Plugins:** autosuggestions, syntax highlighting, history substring search (type, then ↑), git, sudo (Esc Esc),
   extract, colored man pages, fzf and zoxide when installed.
-- **Shortcuts:** `deck`, `jackin`, `skin`, and `ls`/`ll`/`tree` through eza when it's installed.
+- **`jackin`:** tunes into the deck from any terminal with a full-screen jack-in sequence in your skin's colors
+  (handshake, ICE bypass, synapse sync, glitching countdown), then opens the deck right there.
+  `jackin --session` logs into the NETDECK session instead, and `jackin --quick` skips the show. Any key skips it.
+- **Shortcuts:** `deck`, `skin`, and `ls`/`ll`/`tree` through eza when it's installed.
 - Your old `~/.zshrc` is saved as `~/.zshrc.pre-netdeck` (`--undo` restores it). Put your own lines in
   `~/.zshrc.local`, which future updates never overwrite.
 
@@ -156,7 +175,7 @@ apps open separately, and quick commands like `ls`, `git status` or `ping` strea
 | `procs` / **F3** · `kill <pid\|name>` | process manager (sort, filter, kill) |
 | `scan` / **F5** · `sysinfo` / **F7** | network recon · hardware and identity dossier |
 | `open <path\|url>` · `cd <dir>` | default-app open · change the deck's working directory |
-| `memo` · `shards` · `history` · `clear` · `rain` (**F6**) · `glitch` | notes, history, screensaver, effects |
+| `news` (**F6**) · `memo` · `shards` · `history` · `clear` · `rain` · `glitch` | notes, history, screensaver, effects |
 | `update` · `lock` · `suspend` · `reboot` · `poweroff` · `logout` | system and power control (with confirmations) |
 | `quit` / **F10** | jack out (in the NETDECK session: log out) |
 

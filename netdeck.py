@@ -15,6 +15,10 @@ Python 3.8+ and curses only. Run:  python3 netdeck.py   (or `netdeck` once insta
 
 import argparse
 import curses
+import datetime
+import email.utils
+import html
+import itertools
 import getpass
 import glob
 import json
@@ -34,8 +38,12 @@ import subprocess
 import sys
 import threading
 import unicodedata
+import textwrap
 import time
+import urllib.request
+import xml.etree.ElementTree as ET
 from collections import deque
+from html.parser import HTMLParser
 
 VERSION = "3.0.77"
 HOME = os.path.expanduser("~")
@@ -46,13 +54,16 @@ CONF_FILE = os.path.join(CONF_DIR, "config.json")
 HIST_FILE = os.path.join(DATA_DIR, "history")
 SHARDS_FILE = os.path.join(DATA_DIR, "shards.log")
 
-DEFAULT_LAYOUT = {"left": ["sys", "mem", "disk", "net", "bio", "procs"], "right": ["dock", "console"]}
+DEFAULT_LAYOUT = {"left": ["sys", "mem", "disk", "net", "bio", "procs"], "right": ["dock", "news", "console"]}
 DEFAULT_CONF = {
     "theme": "netrunner",     # built-in or a name from "themes"
     "fx": True,               # glitches, flicker, typing effect
     "scan": True,             # alternating scanline rows
     "boot": True,             # boot sequence on start
     "ticker": True,           # scrolling news ticker
+    "news": True,             # live headlines (ticker, NEWSFEED panel, F6 reader)
+    "feeds": None,            # news sources; None = the defaults (see `news sources`)
+    "news_refresh": 15,       # minutes between refreshes
     "neural": True,           # small neural-link readout in the top bar
     "kanji": True,            # Japanese kicker labels (needs a CJK font, Ubuntu ships Noto CJK)
     "toasts": True,           # pop-up notifications
@@ -136,21 +147,6 @@ LOGO = [
     "██║╚██╗██║██╔══╝     ██║   ██║  ██║██╔══╝  ██║     ██╔═██╗ ",
     "██║ ╚████║███████╗   ██║   ██████╔╝███████╗╚██████╗██║  ██╗",
     "╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝",
-]
-
-BULLETINS = [
-    "NETWATCH ADVISORY: rogue AI sighting past the Blackwall - all runners stay frosty",
-    "ARASAKA STOCK +3.2% after orbital contract - your stolen deck doesn't care",
-    "MAXTAC raid in Watson; avoid the Kabuki market tonight",
-    "Night City forecast: acid drizzle, 31C, smog index CRITICAL",
-    "Fixer board: 4 new gigs posted - eddies on delivery",
-    "TRAUMA TEAM platinum response time down to 3m 40s",
-    "Militech convoy rerouted through Santo Domingo - expect gridlock",
-    "Corp telemetry for this node: BLACKHOLED",
-    "Ripperdoc special: chrome tune-ups, no questions asked",
-    "Afterlife reports record crowd; drinks named after dead legends",
-    "Old Net static rising - signal integrity 87%",
-    "Reminder: never jack in without a backup proxy, choom",
 ]
 
 FEED = [
@@ -902,6 +898,220 @@ def cpu_model():
 
 
 # --------------------------------------------------------------------------------------------
+#  Live news (RSS / Atom). Swedish and world feeds by default; edit with `news add` / config "feeds".
+# --------------------------------------------------------------------------------------------
+
+DEFAULT_FEEDS = [
+    {"name": "SVT", "region": "se", "url": "https://www.svt.se/rss.xml"},
+    {"name": "Ekot", "region": "se", "url": "https://api.sr.se/api/rss/program/83"},
+    {"name": "DN", "region": "se", "url": "https://www.dn.se/rss/"},
+    {"name": "Aftonbladet", "region": "se", "url": "https://rss.aftonbladet.se/rss2/small/pages/sections/senastenytt/"},
+    {"name": "Expressen", "region": "se", "url": "https://feeds.expressen.se/nyheter/"},
+    {"name": "BBC", "region": "world", "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
+    {"name": "Guardian", "region": "world", "url": "https://www.theguardian.com/world/rss"},
+    {"name": "Al Jazeera", "region": "world", "url": "https://www.aljazeera.com/xml/rss/all.xml"},
+]
+NEWS_CACHE = os.path.join(CACHE_DIR, "news.json")
+HTTP_UA = "Mozilla/5.0 (X11; Linux x86_64) NETDECK-OS/3"
+
+
+def http_get(url, limit=2_000_000, timeout=10):
+    req = urllib.request.Request(url, headers={"User-Agent": HTTP_UA, "Accept-Language": "sv,en;q=0.8"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = r.read(limit)
+        charset = r.headers.get_content_charset() or "utf-8"
+    return data, charset
+
+
+def strip_html(s):
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    return re.sub(r"\s+", " ", html.unescape(s)).strip()
+
+
+def parse_ts(s):
+    if not s:
+        return 0.0
+    s = s.strip()
+    try:
+        return email.utils.parsedate_to_datetime(s).timestamp()
+    except (TypeError, ValueError, IndexError):
+        pass
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def parse_feed(data, src, region):
+    """RSS 2.0 or Atom → [{src, region, title, summary, link, ts}]."""
+    root = ET.fromstring(data)
+
+    def tag(e):
+        return e.tag.rsplit("}", 1)[-1] if isinstance(e.tag, str) else ""
+
+    items = []
+    for e in root.iter():
+        if tag(e) not in ("item", "entry"):
+            continue
+        title = link = summary = date = ""
+        for c in e:
+            ct = tag(c)
+            text = "".join(c.itertext())
+            if ct == "title":
+                title = strip_html(text)
+            elif ct == "link" and not link:
+                val = (c.get("href") or text or "").strip()
+                if val and c.get("rel", "alternate") == "alternate":
+                    link = val
+            elif ct in ("description", "summary", "content", "encoded") and not summary:
+                summary = strip_html(text)
+            elif ct in ("pubDate", "published", "updated", "date") and not date:
+                date = text
+        if title:
+            items.append(dict(src=src, region=region, title=title, summary=summary[:1500], link=link,
+                              ts=parse_ts(date)))
+    return items[:50]
+
+
+class _ArticleParser(HTMLParser):
+    """Pulls readable paragraphs out of a news page (prefers text inside <article>)."""
+    SKIP = {"script", "style", "nav", "footer", "aside", "header", "figure", "figcaption", "form", "button",
+            "noscript", "svg", "template"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.skip = 0
+        self.article = 0
+        self.in_p = False
+        self.buf = []
+        self.paras, self.article_paras = [], []
+        self.title = ""
+        self.in_title = False
+
+    def handle_starttag(self, t, a):
+        if t in self.SKIP:
+            self.skip += 1
+        elif t == "article":
+            self.article += 1
+        elif t in ("p", "li") and not self.skip and t == "p":
+            self.in_p, self.buf = True, []
+        elif t == "h1" and not self.title:
+            self.in_title, self.buf = True, []
+
+    def handle_endtag(self, t):
+        if t in self.SKIP and self.skip:
+            self.skip -= 1
+        elif t == "article" and self.article:
+            self.article -= 1
+        elif t == "p" and self.in_p:
+            self.in_p = False
+            txt = re.sub(r"\s+", " ", "".join(self.buf)).strip()
+            if len(txt) > 40 and not txt.startswith("En utskrift från"):
+                (self.article_paras if self.article else self.paras).append(txt)
+        elif t == "h1" and self.in_title:
+            self.in_title = False
+            self.title = re.sub(r"\s+", " ", "".join(self.buf)).strip()
+
+    def handle_data(self, d):
+        if (self.in_p or self.in_title) and not self.skip:
+            self.buf.append(d)
+
+
+def fetch_article(url):
+    data, charset = http_get(url, limit=4_000_000, timeout=12)
+    p = _ArticleParser()
+    p.feed(data.decode(charset, "replace"))
+    paras = p.article_paras if len(p.article_paras) >= 2 else p.paras
+    seen, out = set(), []
+    for t in paras:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return p.title, out[:120]
+
+
+class News:
+    def __init__(self):
+        self.items = []
+        self.status = {}
+        self.updated = 0.0
+        self.busy = False
+        self.new_count = 0
+        try:
+            with open(NEWS_CACHE) as fh:
+                c = json.load(fh)
+            self.items, self.updated = c.get("items", []), c.get("updated", 0.0)
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def feeds(conf):
+        f = conf.get("feeds")
+        return f if isinstance(f, list) and f else DEFAULT_FEEDS
+
+    def refresh(self, conf, done=None):
+        if self.busy:
+            return
+        self.busy = True
+        feeds = [dict(f) for f in self.feeds(conf)]
+
+        def one(f, out, status):
+            try:
+                data, _cs = http_get(f["url"], timeout=8)
+                got = parse_feed(data, f.get("name", "?"), f.get("region", "world"))
+                out.extend(got)
+                status[f.get("name", "?")] = f"{len(got)} items"
+            except Exception as e:  # network, HTTP or XML errors: keep the rest
+                status[f.get("name", "?")] = f"offline ({type(e).__name__})"
+
+        def run():
+            try:
+                out, status = [], {}
+                threads = [threading.Thread(target=one, args=(f, out, status), daemon=True) for f in feeds]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(15)
+                if out:
+                    seen, merged = set(), []
+                    for it in sorted(out, key=lambda i: -i["ts"]):
+                        key = it["link"] or it["title"]
+                        if key not in seen:
+                            seen.add(key)
+                            merged.append(it)
+                    old = {i.get("link") or i.get("title") for i in self.items}
+                    self.new_count = sum(1 for i in merged[:40] if (i["link"] or i["title"]) not in old) \
+                        if self.items else 0
+                    self.items, self.updated = merged[:400], time.time()
+                    try:
+                        os.makedirs(CACHE_DIR, exist_ok=True)
+                        with open(NEWS_CACHE, "w") as fh:
+                            json.dump({"items": self.items, "updated": self.updated}, fh)
+                    except OSError:
+                        pass
+                self.status = status
+            finally:
+                self.busy = False
+                if done:
+                    done()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def view(self, region=None):
+        return [i for i in self.items if region in (None, "all") or i.get("region") == region]
+
+    def ticker(self, n=8):
+        se = self.view("se")[:n]
+        world = self.view("world")[:n]
+        out = []
+        for a, b in itertools.zip_longest(se, world):
+            for it in (a, b):
+                if it:
+                    out.append((it["src"], it["title"]))
+        return out
+
+
+# --------------------------------------------------------------------------------------------
 #  Program catalog
 # --------------------------------------------------------------------------------------------
 
@@ -1196,6 +1406,8 @@ COMMANDS = [
     ("bright", "<percent>", "screen brightness (brightnessctl)", ["brightness"]),
     ("fx", "[on|off|scan|boot]", "toggle effects, scanlines, boot sequence", []),
     ("glitch", "", "shake the signal", []),
+    ("news", "[se|world|refresh|sources|add|rm]", "live Swedish + world headlines, read articles in the deck (F6)",
+     ["nyheter", "headlines"]),
     ("rain", "", "data rain screensaver", ["screensaver"]),
     ("memo", "<text>", "write a data shard to the vault", ["note", "shard"]),
     ("shards", "[n]", "read the latest data shards", ["notes"]),
@@ -1215,20 +1427,20 @@ COMMANDS = [
 PANELS = {  # name: title shown in settings
     "sys": "SYSCORE  cpu", "mem": "MEMORY", "disk": "STORAGE", "net": "NET UPLINK", "bio": "VITALS  temps/power",
     "procs": "PROCESSES", "dock": "DOCK  pinned apps", "console": "CONSOLE", "neural": "NEURAL LINK  big panel",
-    "stream": "DATASTREAM  hex",
+    "stream": "DATASTREAM  hex", "news": "NEWSFEED  live headlines",
 }
 PANEL_HOME = {"sys": "left", "mem": "left", "disk": "left", "net": "left", "bio": "left", "procs": "left",
-              "stream": "left", "dock": "right", "neural": "right", "console": "right"}
+              "stream": "left", "news": "right", "dock": "right", "neural": "right", "console": "right"}
 
 JP_LABELS = {
     "SYSCORE": "演算", "MEMORY": "記憶", "STORAGE": "保存", "NET UPLINK": "接続", "VITALS": "生体",
     "PROCESSES": "処理", "DOCK": "装備", "CONSOLE": "端末", "NEURAL LINK": "神経", "DATASTREAM": "データ",
-    "PREVIEW": "外観", "ARSENAL // INSTALLED PROGRAMS": "兵器庫", "PROCESS MANAGER": "処理",
+    "PREVIEW": "外観", "NEWSFEED": "報道", "NEWS // NYHETER": "報道", "ARSENAL // INSTALLED PROGRAMS": "兵器庫", "PROCESS MANAGER": "処理",
     "CODEX // COMMAND REFERENCE": "案内", "TUNE // CUSTOMIZE THE DECK": "外観", "CONFIRM": "確認",
 }
 
 KEYBAR = [("F1", "CODEX"), ("F2", "ARSENAL"), ("F3", "PROCS"), ("F4", "SHELL"), ("F5", "RECON"),
-          ("F6", "RAIN"), ("F7", "DOSSIER"), ("F8", "TUNE"), ("F9", "SKIN"), ("F10", "JACK OUT")]
+          ("F6", "NEWS"), ("F7", "DOSSIER"), ("F8", "TUNE"), ("F9", "SKIN"), ("F10", "JACK OUT")]
 
 
 class Deck:
@@ -1301,6 +1513,8 @@ class Deck:
         self.exit_code = 0
         self.notes = deque()  # messages from background threads
         self.toasts = []
+        self.news = News()
+        self.next_news = 0.0
         self._pn = None  # panel number for the next panel() call
 
     # ---------------------------------------------------------------- persistence
@@ -1553,6 +1767,8 @@ class Deck:
             self.draw_help()
         elif self.mode == "settings":
             self.draw_settings()
+        elif self.mode == "news":
+            self.draw_news_overlay()
         self.draw_toasts()
         if self.confirm:
             self.draw_confirm()
@@ -1625,7 +1841,11 @@ class Deck:
         mp = st_.mem["used"] / st_.mem["total"] * 100
         live = (f"CPU {st_.cpu:3.0f}%  MEM {mp:3.0f}%  NET ▼{fmt_rate(st_.rx):>10} ▲{fmt_rate(st_.tx):>10}  "
                 f"PROCS {st_.nprocs:4d}  TRACE {self.trace:3.0f}%")
-        text = "  //  ".join([live] + BULLETINS) + "  //  "
+        heads = [f"{src.upper()} ▸ {title}" for src, title in self.news.ticker()] \
+            if self.conf.get("news", True) else []
+        if not heads:
+            heads = ["NEWS FEED // syncing…"] if self.conf.get("news", True) else []
+        text = "  //  ".join([live] + heads) + "  //  "
         kick = " ニュース ▸ " if self.conf.get("kanji", True) else " NEWS ▸ "
         kw = dw(kick)
         off = int(now * 13) % len(text)
@@ -1634,6 +1854,8 @@ class Deck:
         self.put(y, kw, view, self.c("dim", y))
         for m in re.finditer("//", view):
             self.put(y, kw + m.start(), "//", self.c("pri", y))
+        for m in re.finditer(r"([A-ZÅÄÖ][A-ZÅÄÖ ]{1,14}) ▸", view):
+            self.put(y, kw + m.start(), m.group(0), self.c("acc", y, True))
         i = view.find("CPU ")
         if i >= 0:
             self.put(y, kw + i, view[i:i + len(live)], self.c("txt", y))
@@ -1704,6 +1926,8 @@ class Deck:
             return 7, 0
         if name == "stream":
             return 6, 1
+        if name == "news":
+            return 2 + max(3, min(7, len(self.news.items))), 0
         return 6, 5  # console
 
     def alloc(self, names, avail, w):
@@ -2495,6 +2719,7 @@ class Deck:
         rows += [("orn", "ornament", "Panel ornament")]
         rows += [("bool", k, lab) for k, lab in (("fx", "Glitches & animations"), ("scan", "Scanline rows"),
                                                  ("boot", "Boot sequence"), ("ticker", "News ticker"),
+                                                 ("news", "Live news (SVT, Ekot, BBC…)"),
                                                  ("neural", "Neural readout in top bar"),
                                                  ("kanji", "Japanese labels"), ("toasts", "Toast notifications"),
                                                  ("exact_colors", "Exact hex colors"))]
@@ -2732,6 +2957,254 @@ class Deck:
         elif kind == "act" and key == "save":
             self.save_theme(text)
 
+    # -- news
+    def news_done(self):
+        """Called from the fetch thread when a refresh finishes."""
+        n = self.news.new_count
+        if n and self.conf.get("news", True):
+            top = self.news.items[0]
+            self.toast(f"INCOMING // {n} NEW HEADLINE{'S' if n > 1 else ''}", f"{top['src']}: {top['title']}", "acc", 6)
+            self.notes.append(([(f"{n} new headlines ", "txt"), ("// F6 to read", "dim")], "txt", "NEWS", "acc"))
+
+    def news_time(self, ts):
+        if not ts:
+            return "--:--"
+        t = time.localtime(ts)
+        return time.strftime("%H:%M", t) if time.strftime("%Y%m%d", t) == time.strftime("%Y%m%d") \
+            else time.strftime("%d.%m", t)
+
+    def draw_news(self, y, x, h, w, now):
+        st = "syncing…" if self.news.busy else (f"{len(self.news.items)} · F6" if self.news.items else "offline")
+        self.panel(y, x, h, w, "NEWSFEED", st, role="pri")
+        ix, iw = x + 2, w - 4
+        items = self.news.items[: h - 2]
+        if not items:
+            msg = "pulling feeds…" if self.conf.get("news", True) else "news is off - settings (F8) to turn it on"
+            self.put(y + 1, ix, msg, self.c("dim", y + 1))
+            return
+        sw = min(12, max(len(i["src"]) for i in items) + 1)
+        for k, it in enumerate(items):
+            r = y + 1 + k
+            self.put(r, ix, self.news_time(it["ts"]), self.c("dim", r))
+            self.put(r, ix + 6, f"{it['src'][:sw - 1]:<{sw}}", self.c("hi" if it["region"] == "se" else "acc", r))
+            self.put(r, ix + 6 + sw, it["title"][: iw - 6 - sw], self.c("txt", r, k == 0))
+
+    def cmd_news(self, args, rest):
+        a = args[0].lower() if args else ""
+        if a in ("refresh", "sync", "r"):
+            self.news.refresh(self.conf, self.news_done)
+            return self.info("pulling feeds…", "acc")
+        if a in ("sources", "feeds"):
+            self.head("NEWS SOURCES  (news add <url> [se|world] [name] · news rm <n>)")
+            for i, f in enumerate(self.news.feeds(self.conf), 1):
+                state = self.news.status.get(f.get("name"), "—")
+                self.log([(f"  {i:>2}  ", "dim"), (f"{f.get('name', '?'):<12}", "acc"),
+                          (f"{f.get('region', 'world'):<6}", "hi" if f.get("region") == "se" else "dim"),
+                          (f"{state:<22}", "ok" if "items" in state else "warn"), (f.get("url", ""), "dim")])
+            return
+        if a == "add":
+            if len(args) < 2 or not re.match(r"^https?://", args[1]):
+                return self.err("usage: news add <feed url> [se|world] [name]")
+            region = args[2].lower() if len(args) > 2 and args[2].lower() in ("se", "world") else "world"
+            name = " ".join(args[3:]) if len(args) > 3 else re.sub(r"^www\.", "", args[1].split("/")[2]).split(".")[0]
+            feeds = [dict(f) for f in self.news.feeds(self.conf)] + [{"name": name, "region": region, "url": args[1]}]
+            self.conf["feeds"] = feeds
+            save_conf(self.conf)
+            self.news.refresh(self.conf, self.news_done)
+            return self.ok(f"added {name} ({region}) - pulling feeds")
+        if a in ("rm", "remove", "del"):
+            feeds = [dict(f) for f in self.news.feeds(self.conf)]
+            if len(args) < 2 or not args[1].isdigit() or not 1 <= int(args[1]) <= len(feeds):
+                return self.err("usage: news rm <number from 'news sources'>")
+            gone = feeds.pop(int(args[1]) - 1)
+            self.conf["feeds"] = feeds
+            save_conf(self.conf)
+            return self.ok(f"removed {gone.get('name')}")
+        if a == "reset":
+            self.conf["feeds"] = None
+            save_conf(self.conf)
+            self.news.refresh(self.conf, self.news_done)
+            return self.ok("news sources reset to the defaults")
+        tab = {"se": 1, "sverige": 1, "sweden": 1, "world": 2, "varlden": 2}.get(a, 0)
+        self.mode, self.ov = "news", {"tab": tab, "sel": 0, "top": 0}
+        if not self.news.items and not self.news.busy:
+            self.news.refresh(self.conf, self.news_done)
+
+    NEWS_TABS = [("all", "ALL", "全て"), ("se", "SVERIGE", "国内"), ("world", "WORLD", "世界")]
+
+    def news_list(self):
+        return self.news.view(self.NEWS_TABS[self.ov.get("tab", 0)][0])
+
+    def draw_news_overlay(self):
+        ov = self.ov
+        if ov.get("read") is not None:
+            return self.draw_reader()
+        y, x, h, w = self.box("NEWS // NYHETER", "↑↓ select  TAB region  ENTER read  o browser  r refresh  ESC close",
+                              role="pri")
+        r = y + 1
+        cx = x + 3
+        for i, (_k, lab, jp) in enumerate(self.NEWS_TABS):
+            text = f" {jp} {lab} " if self.conf.get("kanji", True) else f" {lab} "
+            on = i == ov.get("tab", 0)
+            self.put(r, cx, text, self.inv("pri") if on else self.c("dim", r))
+            cx += dw(text) + 1
+        upd = self.news_time(self.news.updated) if self.news.updated else "never"
+        state = "syncing…" if self.news.busy else f"updated {upd} · {len(self.news.feeds(self.conf))} sources"
+        self.put(r, x + w - len(state) - 3, state, self.c("acc" if self.news.busy else "dim", r))
+        self.put(r + 1, x + 1, "─" * (w - 2), self.c("line", r + 1))
+        items = self.news_list()
+        list_top = y + 3
+        prev_h = 7
+        list_h = max(3, h - 4 - prev_h - 1)
+        if not items:
+            msg = "pulling feeds…" if self.news.busy else "no headlines yet - r to refresh (needs internet)"
+            self.put(list_top + 1, x + 4, msg, self.c("dim", list_top + 1))
+            return
+        ov["sel"] = max(0, min(ov.get("sel", 0), len(items) - 1))
+        top = ov.get("top", 0)
+        if ov["sel"] < top:
+            top = ov["sel"]
+        if ov["sel"] >= top + list_h:
+            top = ov["sel"] - list_h + 1
+        ov["top"] = top
+        sw = 13
+        for k, it in enumerate(items[top:top + list_h]):
+            rr = list_top + k
+            sel = top + k == ov["sel"]
+            line_w = w - 6
+            if sel:
+                self.put(rr, x + 2, " " * line_w, self.inv("pri"))
+                self.put(rr, x + 2, f"▶ {self.news_time(it['ts'])}  {it['src'][:sw - 1]:<{sw}}", self.inv("pri"))
+                self.put(rr, x + 2 + 9 + sw, it["title"][: line_w - 9 - sw], self.inv("pri"))
+            else:
+                self.put(rr, x + 4, self.news_time(it["ts"]), self.c("dim", rr))
+                self.put(rr, x + 11, f"{it['src'][:sw - 1]:<{sw}}", self.c("hi" if it["region"] == "se" else "acc", rr))
+                self.put(rr, x + 11 + sw, it["title"][: line_w - 9 - sw], self.c("txt", rr))
+        if len(items) > list_h:
+            frac = top / max(1, len(items) - list_h)
+            sy = list_top + int(frac * (list_h - 1))
+            for rr in range(list_top, list_top + list_h):
+                self.put(rr, x + w - 3, "┃" if rr == sy else "│", self.c("pri" if rr == sy else "line", rr))
+        # preview of the selected story
+        it = items[ov["sel"]]
+        py = list_top + list_h
+        self.put(py, x + 1, "─" * (w - 2), self.c("line", py))
+        meta = f"{it['src'].upper()}  //  {self.news_time(it['ts'])}  //  {'SVERIGE' if it['region'] == 'se' else 'WORLD'}"
+        self.put(py + 1, x + 4, meta, self.c("acc", py + 1, True))
+        lines = textwrap.wrap(it["summary"] or "(no summary in the feed - press ENTER to read the article)", w - 10)
+        for k, ln in enumerate(lines[: prev_h - 3]):
+            self.put(py + 2 + k, x + 4, ln, self.c("txt", py + 2 + k))
+        self.put(py + prev_h - 1, x + 4, (it["link"] or "")[: w - 10], self.c("dim", py + prev_h - 1))
+
+    def draw_reader(self):
+        ov = self.ov
+        it = ov["read"]
+        y, x, h, w = self.box("NEWS // NYHETER", "↑↓ PGUP PGDN scroll  o open in browser  ESC back", role="pri")
+        cw = min(96, w - 10)
+        cx = x + (w - cw) // 2
+        lines = []
+        for ln in textwrap.wrap(it["title"], cw) or [""]:
+            lines.append((ln, "hi", True))
+        meta = f"{it['src'].upper()}  //  {self.news_time(it['ts'])}  //  {it['link']}"
+        lines.append((meta[:cw], "dim", False))
+        lines.append(("─" * cw, "line", False))
+        if ov.get("loading"):
+            dots = "." * (int(self.now * 4) % 4)
+            lines.append((f"decrypting article{dots}", "acc", False))
+        elif ov.get("error"):
+            lines.append((f"✗ {ov['error']}", "bad", False))
+            lines.append(("", "txt", False))
+            lines.append(("press o to open it in a browser instead", "dim", False))
+        else:
+            paras = ov.get("paras") or []
+            if not paras:
+                lines.append(("couldn't find readable text on that page (paywall or live blog?) - o opens it "
+                              "in a browser", "dim", False))
+            for ptext in paras:
+                for ln in textwrap.wrap(ptext, cw):
+                    lines.append((ln, "txt", False))
+                lines.append(("", "txt", False))
+        view = h - 3
+        ov["max"] = max(0, len(lines) - view)
+        off = max(0, min(ov.get("off", 0), ov["max"]))
+        ov["off"] = off
+        for k, (text, role, bold) in enumerate(lines[off:off + view]):
+            rr = y + 2 + k
+            self.put(rr, cx, text, self.c(role, rr, bold))
+        if ov["max"]:
+            pct = f" {int(off / ov['max'] * 100):3d}% "
+            self.put(y + h - 1, x + 6, pct, self.c("acc", y + h - 1))
+
+    def open_link(self, url):
+        if not url:
+            return
+        if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+            opener = shutil.which("xdg-open")
+            if opener:
+                return self.spawn([opener, url], url.split("/")[2] if "//" in url else url)
+        for tb in ("w3m", "lynx", "links"):
+            if shutil.which(tb):
+                return self.foreground([tb, url], pause=False, label=tb)
+        self.err("no browser available - install one with: get w3m")
+
+    def read_article(self, it):
+        self.ov.update(read=it, loading=True, error=None, paras=None, off=0)
+        ov = self.ov
+
+        def run():
+            try:
+                _title, paras = fetch_article(it["link"])
+                ov["paras"] = paras
+            except Exception as e:
+                ov["error"] = f"couldn't load the article ({type(e).__name__})"
+            finally:
+                ov["loading"] = False
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def news_key(self, k):
+        ov = self.ov
+        if ov.get("read") is not None:
+            if k in ("\x1b", "q", curses.KEY_BACKSPACE, "\x7f", curses.KEY_LEFT):
+                ov["read"] = None
+            elif k in (curses.KEY_DOWN, "j"):
+                ov["off"] = ov.get("off", 0) + 1
+            elif k in (curses.KEY_UP, "k"):
+                ov["off"] = max(0, ov.get("off", 0) - 1)
+            elif k in (curses.KEY_NPAGE, " "):
+                ov["off"] = ov.get("off", 0) + self.H // 2
+            elif k == curses.KEY_PPAGE:
+                ov["off"] = max(0, ov.get("off", 0) - self.H // 2)
+            elif k == curses.KEY_HOME:
+                ov["off"] = 0
+            elif k == curses.KEY_END:
+                ov["off"] = 10 ** 6
+            elif k == "o":
+                self.open_link(ov["read"].get("link"))
+            return
+        items = self.news_list()
+        if k in ("\x1b", "q", curses.KEY_F6):
+            self.mode = "main"
+        elif k in ("\t", curses.KEY_RIGHT, "l"):
+            ov["tab"], ov["sel"], ov["top"] = (ov.get("tab", 0) + 1) % 3, 0, 0
+        elif k in (curses.KEY_BTAB, curses.KEY_LEFT, "h"):
+            ov["tab"], ov["sel"], ov["top"] = (ov.get("tab", 0) - 1) % 3, 0, 0
+        elif k in (curses.KEY_DOWN, "j"):
+            ov["sel"] = ov.get("sel", 0) + 1
+        elif k in (curses.KEY_UP, "k"):
+            ov["sel"] = max(0, ov.get("sel", 0) - 1)
+        elif k == curses.KEY_NPAGE:
+            ov["sel"] = ov.get("sel", 0) + self.H // 2
+        elif k == curses.KEY_PPAGE:
+            ov["sel"] = max(0, ov.get("sel", 0) - self.H // 2)
+        elif k == "r":
+            self.news.refresh(self.conf, self.news_done)
+        elif items and k in ("\n", "\r", curses.KEY_ENTER):
+            self.read_article(items[max(0, min(ov.get("sel", 0), len(items) - 1))])
+        elif items and k == "o":
+            self.open_link(items[max(0, min(ov.get("sel", 0), len(items) - 1))].get("link"))
+
+
     # -- confirm
     def ask(self, question, action):
         self.confirm = (question, action)
@@ -2800,9 +3273,11 @@ class Deck:
             return self.help_key(k)
         if self.mode == "settings":
             return self.settings_key(k)
+        if self.mode == "news":
+            return self.news_key(k)
 
         fkeys = {curses.KEY_F1: "help", curses.KEY_F2: "apps", curses.KEY_F3: "procs", curses.KEY_F4: "shell",
-                 curses.KEY_F5: "scan", curses.KEY_F6: "rain", curses.KEY_F7: "sysinfo", curses.KEY_F8: "settings", curses.KEY_F9: "theme +",
+                 curses.KEY_F5: "scan", curses.KEY_F6: "news", curses.KEY_F7: "sysinfo", curses.KEY_F8: "settings", curses.KEY_F9: "theme +",
                  curses.KEY_F10: "quit"}
         if k in fkeys:
             self.execute(fkeys[k], record=False)
@@ -4043,6 +4518,9 @@ class Deck:
                 self.last_stat = self.now
                 self.alerts()
                 self.reap()
+                if self.conf.get("news", True) and self.now >= self.next_news:
+                    self.next_news = self.now + max(3, int(self.conf.get("news_refresh", 15) or 15)) * 60
+                    self.news.refresh(self.conf, self.news_done)
                 if self.catalog.ready and not self.catalog_announced:
                     self.catalog_announced = True
                     c = self.catalog

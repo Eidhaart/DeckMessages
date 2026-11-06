@@ -64,7 +64,8 @@ clone https://github.com/zsh-users/zsh-syntax-highlighting "$CUSTOM/plugins/zsh-
 say "plugins: ${cyan}autosuggestions, syntax-highlighting${rst} ${dim}+ git sudo extract history-substring-search fzf zoxide${rst}"
 
 install -m 0644 "$HERE/netrunner.zsh-theme" "$CUSTOM/themes/netrunner.zsh-theme"
-say "theme: ${cyan}netrunner${rst} ${dim}(follows your deck skin)${rst}"
+install -m 0644 "$HERE/jackin.zsh" "$CUSTOM/netdeck-jackin.zsh"   # oh-my-zsh loads every *.zsh in custom/
+say "theme: ${cyan}netrunner${rst} ${dim}(follows your deck skin)${rst}  ·  command: ${cyan}jackin${rst}"
 
 if [[ -f $HOME/.zshrc ]] && ! grep -q "NETDECK//OS shell" "$HOME/.zshrc"; then
   cp "$HOME/.zshrc" "$BACKUP"

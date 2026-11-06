@@ -38,7 +38,6 @@ zstyle ':completion:*:warnings' format "%F{${ND[bad]}}✗ no matches%f"
 
 # deck shortcuts
 alias deck='netdeck'
-alias jackin='netdeck-switch deck'
 alias skin='deckskin'
 if (( $+commands[eza] )); then
   alias ls='eza --group-directories-first'
@@ -56,7 +55,7 @@ if [[ -o interactive && ${NETDECK_GREETING:-1} != 0 && -z $_ND_GREETED ]]; then
   if [[ -n $NETDECK ]]; then
     print -P "%F{${ND[pri]}}◢ RAW LINK%f %F{${ND[line]}}//%f %F{${ND[dim]}}type%f %F{${ND[hi]}}exit%f %F{${ND[dim]}}to jack back into the deck%f"
   else
-    print -P "%F{${ND[pri]}}◢ NETDECK%f %F{${ND[line]}}//%f %F{${ND[acc]}}%n@%m%f %F{${ND[line]}}//%f %F{${ND[dim]}}zsh ${ZSH_VERSION} // %D{%d.%m.%Y %H:%M} // link stable%f"
+    print -P "%F{${ND[pri]}}◢ NETDECK%f %F{${ND[line]}}//%f %F{${ND[acc]}}%n@%m%f %F{${ND[line]}}//%f %F{${ND[dim]}}%D{%d.%m.%Y %H:%M} // link stable //%f %F{${ND[hi]}}jackin%f %F{${ND[dim]}}to tune in%f"
   fi
 fi
 
