@@ -2,6 +2,7 @@
 """Nightdeck // cyberdeck field terminal."""
 import curses
 import datetime
+import fcntl
 import json
 import locale
 import os
@@ -51,6 +52,8 @@ HOST = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@:%-]*")
 REMOTE_DIR = re.compile(r"[A-Za-z0-9_./~-]{0,200}")
 CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash"
 VIDEOS = HOME / "Videos"
+WATCH = DATA / "watchlist.json"
+WATCH_MAX = 500
 MEDIA_EXT = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".ts", ".ogv", ".flv",
              ".wmv", ".3gp", ".mp3", ".flac", ".ogg", ".oga", ".opus", ".wav", ".m4a", ".aac"}
 VIDEO_OUTPUTS = ("ask", "screen", "terminal")
@@ -951,6 +954,8 @@ class Deck:
 
     def dashboard(self, actions, selected):
         self.load_wire()
+        watch_stamp, flash, flash_until = None, "", 0.0
+        queue = 0
         self.shown_title = None
         glitch_at = time.monotonic() + random.uniform(2, 5)
         glitch = 0
@@ -988,9 +993,24 @@ class Deck:
                 self.put(3, greeting[:typed] + tail, VIT, column=side)
                 top = 5
             glitch = max(0, glitch - 1)
+            try:
+                stamp = WATCH.stat().st_mtime
+            except OSError:
+                stamp = 0
+            if stamp != watch_stamp:  # links sent with `nightdeck add` show up here live
+                items = load_watch()
+                fresh = [item for item in items if not item["done"]]
+                if watch_stamp is not None and len(fresh) > queue and fresh:
+                    flash, flash_until = "NEW LINK " + self.g["ptr"] + " " + watch_label(fresh[0]), now + 10
+                watch_stamp, queue = stamp, len(fresh)
             ticker = height >= 10
             bottom = height - (3 if ticker else 2)
-            if ticker:
+            if ticker and now < flash_until:
+                column = self.put(height - 2, " LINK ", SELBAR, True, column=1)
+                shown = flash if not fx or int(now * 3) % 2 or now < flash_until - 8 else ""
+                self.put(height - 2, " " + shown + "  (Video player " + self.g["ptr"] + " Watch list)", SEL, True,
+                         column=column, limit=width - column - 2)
+            elif ticker:
                 text = self.wire or f"WIRE OFFLINE {self.g['sep']} open News to sync headlines   "
                 column = self.put(height - 2, " WIRE ", BADGE, True, column=1)
                 span = max(0, width - column - 2)
@@ -1009,7 +1029,7 @@ class Deck:
                 if info_row > first + len(actions):
                     session = str(datetime.timedelta(seconds=int(now - self.launched)))
                     self.put(info_row, "SESSION ".ljust(9) + session, DIM, column=3)
-                    self.put(info_row + 1, "TTY".ljust(9) + f"{width}x{height}", DIM, column=3)
+                    self.put(info_row + 1, "QUEUE".ljust(9) + f"{queue} new", VIT if queue else DIM, column=3)
             else:
                 cpu = stats.get("cpu")
                 parts = [f"CPU {'--' if cpu is None else f'{cpu:.0f}%'}"]
@@ -1376,6 +1396,7 @@ class Deck:
                      "Keys while playing: " + MPV_KEYS]
             options = [] if mpv else [("Install mpv and yt-dlp", self.video_install)]
             options += [
+                (f"Watch list ({sum(not i['done'] for i in load_watch())} new)", self.watch_list),
                 ("Browse ~/Videos", lambda: self.video_pick(VIDEOS)),
                 ("Play file by path", self.video_path),
                 ("Play a URL or stream", self.video_url),
@@ -1387,6 +1408,47 @@ class Deck:
                 return
             selected = choice
             options[choice][1]()
+
+    def watch_list(self):
+        selected = 0
+        while True:
+            items = load_watch()
+            fresh = [item for item in items if not item["done"]]
+            labels = [f"Play all new ({len(fresh)})", "Clear watched"] + [
+                (self.g["off"] if item["done"] else self.g["on"]) + " " + watch_label(item) for item in items]
+            intro = None if items else [
+                "The list is empty. Send links from Ubuntu:",
+                "$ deck-add https://youtu.be/...",
+                "README / Watch list shows how to set up deck-add."]
+            choice = self.menu(f"WATCH LIST // {len(fresh)} new", labels, intro=intro, selected=selected)
+            if choice is None:
+                return
+            selected = choice
+            if choice == 0:
+                if fresh:
+                    self.play_links([item["url"] for item in fresh])
+                continue
+            if choice == 1:
+                edit_watch(drop_watched)
+                selected = 0
+                continue
+            item = items[choice - 2]
+            action = self.menu("WATCH LIST // " + watch_label(item)[:50],
+                               ["Play", "Mark as " + ("new" if item["done"] else "watched"), "Remove", "Back"],
+                               intro=[item["url"], "Added " + (item["added"] or "?")])
+            if action == 0:
+                self.play_links([item["url"]])
+            elif action == 1:
+                edit_watch(lambda items: [i.update(done=not i["done"]) for i in items
+                                          if i["url"] == item["url"]])
+            elif action == 2:
+                edit_watch(lambda items: items.__setitem__(
+                    slice(None), [i for i in items if i["url"] != item["url"]]))
+                selected = max(0, selected - 1)
+
+    def play_links(self, urls):
+        if self.play(urls):
+            edit_watch(lambda items: [i.update(done=True) for i in items if i["url"] in urls])
 
     def video_install(self):
         args = ["sudo", "apt-get", "install", "--no-install-recommends", "mpv", "yt-dlp"]
@@ -1495,7 +1557,7 @@ class Deck:
             if self.basic:
                 args.append("--vo-tct-256=yes")
         args += ["--", *map(str, targets)]
-        self.run(args, pause=False)
+        return self.run(args, pause=False) == 0
 
     def claude(self):
         """Claude Code: run it here on 64-bit hardware, or on a bigger machine over SSH."""
@@ -1703,6 +1765,135 @@ class Deck:
         self.file_pick(NOTES, notes=True)
 
 
+def load_watch():
+    try:
+        raw = json.loads(WATCH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    items = []
+    for item in raw.get("items", []) if isinstance(raw, dict) else []:
+        if isinstance(item, dict) and isinstance(item.get("url"), str) and public_url(
+                item["url"], ("https", "http"), allow_query=True):
+            items.append({"url": item["url"], "title": clean(str(item.get("title") or ""))[:200],
+                          "added": clean(str(item.get("added") or ""))[:40],
+                          "done": item.get("done") is True, "tried": item.get("tried") is True})
+    return items[:WATCH_MAX]
+
+
+def edit_watch(change):
+    """Load, change and save the watch list under a lock (the CLI and the app share it)."""
+    DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(DATA / "watchlist.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        items = load_watch()
+        result = change(items)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=DATA, delete=False) as file:
+            temp = Path(file.name)
+        try:
+            temp.write_text(json.dumps({"items": items[:WATCH_MAX]}, ensure_ascii=False, indent=1),
+                            encoding="utf-8")
+            temp.replace(WATCH)
+        finally:
+            temp.unlink(missing_ok=True)
+        return result
+
+
+def drop_watched(items):
+    items[:] = [item for item in items if not item["done"]]
+    return len(items)
+
+
+def watch_label(item):
+    if item["title"]:
+        return item["title"]
+    url = urlsplit(item["url"])
+    return (url.hostname or "") + url.path + ("?" + url.query if url.query else "")
+
+
+def fetch_titles():
+    """Look up titles for new links with yt-dlp. Runs detached after `nightdeck add`."""
+    ytdlp = shutil.which("yt-dlp")
+    if not ytdlp:
+        return
+    for url in [item["url"] for item in load_watch() if not item["title"] and not item["tried"]]:
+        try:
+            result = subprocess.run([ytdlp, "--no-warnings", "--skip-download", "--no-playlist",
+                                     "--print", "title", "--", url],
+                                    capture_output=True, text=True, timeout=90, check=False)
+            title = clean(result.stdout.strip().splitlines()[0])[:200] if result.returncode == 0 \
+                and result.stdout.strip() else ""
+        except (OSError, subprocess.TimeoutExpired):
+            title = ""
+
+        def store(items, url=url, title=title):
+            for item in items:
+                if item["url"] == url:
+                    item["title"], item["tried"] = title or item["title"], True
+        edit_watch(store)
+
+
+def command_line(args):
+    usage = ("Usage: nightdeck                 open the deck\n"
+             "       nightdeck add URL...      add links to the watch list (or one per line on stdin)\n"
+             "       nightdeck list            show the watch list\n"
+             "       nightdeck remove N        remove entry N from the list\n"
+             "       nightdeck clear           remove watched entries")
+    name, rest = args[0], args[1:]
+    if name == "add":
+        if not rest and sys.stdin.isatty():
+            print(usage, file=sys.stderr)
+            return 2
+        links = rest or [line.strip() for line in sys.stdin.read(256 * 1024).splitlines()]
+        links = [link for link in links if link]
+        good = [link for link in links if public_url(link, ("https", "http"), allow_query=True)]
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        def add(items):
+            added = 0
+            for link in good:
+                existing = next((item for item in items if item["url"] == link), None)
+                if existing:
+                    items.remove(existing)
+                    existing["done"] = False
+                    items.insert(0, existing)
+                else:
+                    items.insert(0, {"url": link, "title": "", "added": stamp, "done": False, "tried": False})
+                    added += 1
+            return added
+        added = edit_watch(add) if good else 0
+        for link in links:
+            ok = link in good
+            print(("[ OK ] queued   " if ok else "[ !! ] skipped  ") + display_line(link)[:200]
+                  + ("" if ok else "  (not an http(s) link)"))
+        print(f"{added} new, {len(good) - added} moved to the top. Watch list: {len(load_watch())} links.")
+        if good and shutil.which("yt-dlp"):
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "titles"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        return 0 if len(good) == len(links) and links else 1
+    if name == "list":
+        items = load_watch()
+        for number, item in enumerate(items, 1):
+            print(f"{number:3d} {'   ' if item['done'] else 'new'}  {watch_label(item)[:90]}")
+        if not items:
+            print("Watch list is empty. Add links with: nightdeck add URL")
+        return 0
+    if name == "remove" and len(rest) == 1 and rest[0].isdigit():
+        index = int(rest[0]) - 1
+        removed = edit_watch(lambda items: items.pop(index) if 0 <= index < len(items) else None)
+        print(f"Removed: {watch_label(removed)}" if removed else "No entry with that number.")
+        return 0 if removed else 1
+    if name == "clear":
+        count = edit_watch(drop_watched)
+        print(f"Removed watched entries. {count} left.")
+        return 0
+    if name == "titles":
+        fetch_titles()
+        return 0
+    print(usage, file=sys.stderr if name not in ("help", "-h", "--help") else sys.stdout)
+    return 0 if name in ("help", "-h", "--help") else 2
+
+
 def configure_locale():
     for candidate in ("", "C.UTF-8", "C"):
         try:
@@ -1716,6 +1907,8 @@ def configure_locale():
 
 if __name__ == "__main__":
     configure_locale()
+    if len(sys.argv) > 1:
+        sys.exit(command_line(sys.argv[1:]))
     try:
         os.environ["NIGHTDECK"] = "1"  # child shells must not autostart another deck
         sys.exit(curses.wrapper(lambda screen: Deck(screen).main()) or 0)

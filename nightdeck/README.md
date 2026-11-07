@@ -83,6 +83,16 @@ The dashboard borrows the split navigation, clock and command prompt from [DeckM
   - Keys while playing: **space** pause, **←/→** seek, **9/0** volume, **m** mute, **q** stop. mpv remembers where you stopped each file.
   - **Streaming.** With yt-dlp installed, YouTube and other unprotected streams play, and SVT Play links should too. Streams are capped at 480p H.264, which fits the 800×480 panel and is what the Pi 3B decodes in hardware. Disney+, Netflix and other DRM services need Widevine in a desktop browser. Widevine for Raspberry Pi is 64-bit only, so they can't play on this deck.
   - If setup ran with `--skip-packages`, the module offers **Install mpv and yt-dlp**. Debian's yt-dlp can lag behind YouTube changes. If YouTube stops working, a newer yt-dlp usually fixes it.
+- **Watch list.** Send links to the deck from another computer and watch them later. On the Pi, `nightdeck add URL...` adds links to the top of the list. You can also pipe them in, one per line. `nightdeck list` shows the list, `nightdeck remove N` removes entry N, and `nightdeck clear` removes watched entries. The list lives in `${XDG_DATA_HOME:-~/.local/share}/nightdeck/watchlist.json`. If yt-dlp is installed, titles are looked up in the background. If Nightdeck is open, a new link flashes on the dashboard right away, and the **QUEUE** counter goes up. Open **Video player → Watch list** to play one link or **Play all new**. Played links are marked watched (`○`), and new ones show `●`.
+
+  To send links from Ubuntu, add these to `~/.zshrc` or `~/.bashrc`:
+
+  ```sh
+  deck-add() { if [ $# -gt 0 ]; then printf '%s\n' "$@"; else cat; fi | ssh deck@nightdeck.local .local/bin/nightdeck add; }
+  deck-list() { ssh deck@nightdeck.local .local/bin/nightdeck list; }
+  ```
+
+  Then run `deck-add 'https://www.youtube.com/watch?v=...'`. Put each link in single quotes, because `?` and `&` mean something to your shell. Run `deck-add` with no link to paste several, one per line, and finish with **Ctrl+D**. Links go to the Pi through stdin, so SSH never reinterprets them. With an SSH key set up (`ssh-copy-id deck@nightdeck.local`), you won't need a password.
 - **System vitals.** The full telemetry view sits unnumbered below Settings and opens with `/vitals`. The dashboard panel shows the same readings live.
 - **Character sheets.** Reserved menu entry. It sits unnumbered below Settings and opens with `/sheets`.
 

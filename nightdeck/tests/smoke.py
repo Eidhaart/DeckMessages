@@ -2,7 +2,7 @@
 
 Run: python3 tests/smoke.py   (writes nothing outside a temporary HOME)
 """
-import json, subprocess, sys, tempfile
+import json, subprocess, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import Session
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory() as home:
     env = {"PATH": f"{fake}:{os.environ['PATH']}", "DISPLAY": "", "WAYLAND_DISPLAY": ""}
     s = Session(80, 24, home=home, env=env)
     s.pump(0.6)
-    for key, wait in [("x", 0.6), ("6", 0.6), ("\r", 0.6), (DOWN * 2, 0.2), ("\r", 1.0)]:
+    for key, wait in [("x", 0.6), ("6", 0.6), (DOWN, 0.2), ("\r", 0.6), (DOWN * 2, 0.2), ("\r", 1.0)]:
         s.send(key, wait)
     played = Path(home, "mpv.args").read_text().splitlines() if Path(home, "mpv.args").exists() else []
     check("video plays on deck screen via DRM", "--vo=gpu,drm" in played and "--fs" in played
@@ -123,6 +123,42 @@ with tempfile.TemporaryDirectory() as home:
     for key, wait in [("\r", 0.3), ("\x1b", 0.4)] + QUIT:
         s.send(key, wait)
     check("video module exits cleanly", s.finish() == 0)
+
+# 7. Watch list: links sent with `nightdeck add` appear live and play from the list
+with tempfile.TemporaryDirectory() as home:
+    fake = Path(home, "bin")
+    fake.mkdir()
+    (fake / "mpv").write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$HOME/mpv.args"\n')
+    (fake / "yt-dlp").write_text('#!/bin/sh\nfor a; do last=$a; done\necho "Title of ${last##*=}"\n')
+    for tool in ("mpv", "yt-dlp"):
+        (fake / tool).chmod(0o755)
+    env = dict(os.environ, HOME=home, PATH=f"{fake}:{os.environ['PATH']}")
+    app = str(Path(__file__).resolve().parent.parent / "nightdeck.py")
+    links = "https://www.youtube.com/watch?v=abc&t=10\nnot a link\nhttps://example.com/b?v=xyz\n"
+    out = subprocess.run([sys.executable, app, "add"], input=links, capture_output=True, text=True, env=env)
+    check("add via stdin keeps ? and & intact", "queued   https://www.youtube.com/watch?v=abc&t=10" in out.stdout
+          and "skipped  not a link" in out.stdout and out.returncode == 1)
+    time.sleep(1.5)
+    listing = subprocess.run([sys.executable, app, "list"], capture_output=True, text=True, env=env).stdout
+    check("titles fetched in the background", "Title of abc&t" in listing or "Title of 10" in listing)
+    s = Session(80, 24, home=home, env={"PATH": env["PATH"], "DISPLAY": "", "WAYLAND_DISPLAY": ""})
+    s.pump(0.6)
+    s.send("x", 1.2)
+    check("dashboard shows queue count", "QUEUE    2 new" in s.text())
+    subprocess.run([sys.executable, app, "add", "https://example.com/c?v=live"], capture_output=True, env=env)
+    s.pump(1.5)
+    check("new link flashes on the dashboard", "NEW LINK" in s.text() and "QUEUE    3 new" in s.text())
+    for key, wait in [("6", 0.6), ("\r", 0.6), ("\r", 1.0)]:
+        s.send(key, wait)
+    played = Path(home, "mpv.args").read_text().splitlines() if Path(home, "mpv.args").exists() else []
+    check("play all new sends every link to mpv", played[-3:] == [
+        "https://example.com/c?v=live", "https://example.com/b?v=xyz", "https://www.youtube.com/watch?v=abc&t=10"])
+    check("played links marked watched", "WATCH LIST // 0 new" in s.text())
+    for key, wait in [("\x1b", 0.4), ("\x1b", 0.4)] + QUIT:
+        s.send(key, wait)
+    check("watch list exits cleanly", s.finish() == 0)
+    out = subprocess.run([sys.executable, app, "clear"], capture_output=True, text=True, env=env)
+    check("clear removes watched", "0 left" in out.stdout)
 
 print("\n" + ("ALL PASSED" if not failures else f"{len(failures)} FAILED"))
 sys.exit(1 if failures else 0)
