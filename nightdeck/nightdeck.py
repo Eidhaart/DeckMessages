@@ -80,7 +80,7 @@ GLYPHS = {
         "full": "█", "empty": "░", "spark": "▁▂▃▄▅▆▇█", "spin": "▖▘▝▗", "ptr": "▶",
         "on": "●", "off": "○", "bar": "▌", "sep": "·", "up": "▲", "down": "▼",
         "noise": "▓▒░█▚▞▙▟", "keys": "↑↓", "wire": "///", "cursor": "█",
-        "ok": "✓", "dl": "↓", "wait": "…", "bad": "!",
+        "ok": "✓", "dl": "↓", "wait": "…", "bad": "!", "note": "♪",
         "logo": ("█▄ █ █ █▀▀ █ █ ▀█▀ █▀▄ █▀▀ █▀▀ █▄▀",
                  "█ ▀█ █ █▄█ █▀█  █  █▄▀ ██▄ █▄▄ █ █"),
     },
@@ -90,7 +90,7 @@ GLYPHS = {
         "full": "█", "empty": "░", "spark": "▄█", "spin": "░▒▓█", "ptr": "►",
         "on": "■", "off": "·", "bar": "▌", "sep": "·", "up": "▲", "down": "▼",
         "noise": "░▒▓█▀▄", "keys": "↑↓", "wire": "///", "cursor": "█",
-        "ok": "√", "dl": "↓", "wait": "·", "bad": "!",
+        "ok": "√", "dl": "↓", "wait": "·", "bad": "!", "note": "♪",
         "logo": ("█▄ █ █ █▀▀ █ █ ▀█▀ █▀▄ █▀▀ █▀▀ █▄▀",
                  "█ ▀█ █ █▄█ █▀█  █  █▄▀ ██▄ █▄▄ █ █"),
     },
@@ -99,7 +99,7 @@ GLYPHS = {
         "full": "#", "empty": ".", "spark": "_.-=+*#@", "spin": "|/-\\", "ptr": ">",
         "on": "*", "off": "o", "bar": "|", "sep": "-", "up": "^", "down": "v",
         "noise": "#%@&$?!", "keys": "jk", "wire": "///", "cursor": "_",
-        "ok": "+", "dl": "v", "wait": ".", "bad": "!",
+        "ok": "+", "dl": "v", "wait": ".", "bad": "!", "note": "BT",
         "logo": ("|\\ | | /~~ |_| ~|~ |~\\ |~~ /~~ |/",
                  "| \\| | \\_/ | |  |  |_/ |__ \\__ |\\"),
     },
@@ -216,7 +216,8 @@ def repo_url(value):
 def load_settings():
     defaults = {"theme": "Cyberdeck", "custom": list(THEMES["Cyberdeck"]),
                 "fx": True, "boot": True, "glyphs": "auto", "claude_host": "", "claude_dir": "",
-                "video_out": "ask", "download": True}
+                "video_out": "ask", "download": True,
+                "bt_auto": ""}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -231,6 +232,8 @@ def load_settings():
         isinstance(value, str) and COLOR.fullmatch(value) for value in custom
     ):
         defaults["custom"] = custom
+    if isinstance(saved.get("bt_auto"), str) and (saved["bt_auto"] == "" or BT_MAC.fullmatch(saved["bt_auto"])):
+        defaults["bt_auto"] = saved["bt_auto"]
     if isinstance(saved.get("download"), bool):
         defaults["download"] = saved["download"]
     if saved.get("video_out") in VIDEO_OUTPUTS:
@@ -413,6 +416,9 @@ class Deck:
         self.shown_title = None
         self.started = self.launched = time.monotonic()
         self.wire = ""
+        self.audio = {}
+        if shutil.which("wpctl") or shutil.which("bluetoothctl"):
+            threading.Thread(target=self.audio_monitor, daemon=True).start()
         self.apply_theme()
         self.apply_glyphs()
 
@@ -546,6 +552,10 @@ class Deck:
         if width >= 34:
             beacon = self.g["on"] if second % 2 or not self.preferences["fx"] else self.g["off"]
             right = width - len(clock) - 4
+            bt = self.audio.get("bt")
+            if bt and width >= 64:
+                label = f"{self.g['note']} {bt[:14]}"
+                self.put(0, label, HINT, True, column=right - len(label) - 2)
             self.put(0, beacon, VIT if online else HEAD, True, column=right)
             self.put(0, clock, HINT, True, column=right + 2)
 
@@ -963,6 +973,10 @@ class Deck:
         if stats.get("net"):
             down, up = stats["net"]
             facts.append(("NET", f"{self.g['down']} {rate(down)}  {self.g['up']} {rate(up)}", TEXT))
+        if self.audio.get("volume") is not None:
+            facts.append(("SND", f"{self.audio.get('sink', '')[:18]} "
+                          f"{'muted' if self.audio.get('muted') else str(self.audio['volume']) + '%'}",
+                          HINT if self.audio.get("bt") else TEXT))
         if signal is not None:
             level = min(4, signal // 21)
             facts.append(("WIFI", (self.g["full"] * level).ljust(4, self.g["empty"]) + f" {signal}%", VIT))
@@ -988,13 +1002,17 @@ class Deck:
     def dashboard(self, actions, selected):
         self.load_wire()
         watch_stamp, flash, flash_until = None, "", 0.0
+        flash_tag, flash_tail = " LINK ", ""
         ready_seen = set()
         queue = 0
         self.shown_title = None
         glitch_at = time.monotonic() + random.uniform(2, 5)
         glitch = 0
         scroll = 0
-        hints = [("/", "command"), ("0-9", "open"), (self.g["keys"], "move"), ("esc", "jack out")]
+        hints = [("/", "command"), ("0-9", "open"), (self.g["keys"], "move")]
+        if shutil.which("wpctl"):
+            hints.append(("+/-", "volume"))
+        hints.append(("esc", "jack out"))
         while True:
             fx = self.preferences["fx"]
             now = time.monotonic()
@@ -1037,16 +1055,18 @@ class Deck:
                 ready = {item["url"] for item in fresh if item["state"] == "ready"}
                 if watch_stamp is not None and len(fresh) > queue and fresh:
                     flash, flash_until = "NEW LINK " + self.g["ptr"] + " " + watch_label(fresh[0]), now + 10
+                    flash_tag, flash_tail = " LINK ", "  (Video player " + self.g["ptr"] + " Watch list)"
                 elif watch_stamp is not None and ready - ready_seen:
                     done = next(item for item in fresh if item["url"] in ready - ready_seen)
                     flash, flash_until = "READY " + self.g["ok"] + " " + watch_label(done), now + 10
+                    flash_tag, flash_tail = " LINK ", "  (Video player " + self.g["ptr"] + " Watch list)"
                 watch_stamp, queue, ready_seen = stamp, len(fresh), ready
             ticker = height >= 10
             bottom = height - (3 if ticker else 2)
             if ticker and now < flash_until:
-                column = self.put(height - 2, " LINK ", SELBAR, True, column=1)
+                column = self.put(height - 2, flash_tag, SELBAR, True, column=1)
                 shown = flash if not fx or int(now * 3) % 2 or now < flash_until - 8 else ""
-                self.put(height - 2, " " + shown + "  (Video player " + self.g["ptr"] + " Watch list)", SEL, True,
+                self.put(height - 2, " " + shown + flash_tail, SEL, True,
                          column=column, limit=width - column - 2)
             elif ticker:
                 text = self.wire or f"WIRE OFFLINE {self.g['sep']} open News to sync headlines   "
@@ -1063,11 +1083,12 @@ class Deck:
                 self.vitals_panel(top, left_width + 2, bottom - top + 1, width - left_width - 3,
                                   stats, int(now * 2) % 2 == 0)
                 first, column, inner = top + 1, 2, left_width - 2
-                info_row = bottom - 2
-                if info_row > first + len(actions):
+                free_rows = bottom - (first + len(actions))  # rows left inside the box under the list
+                if free_rows >= 1:
+                    self.put(bottom - 1, "QUEUE".ljust(9) + f"{queue} new", VIT if queue else DIM, column=3)
+                if free_rows >= 3:
                     session = str(datetime.timedelta(seconds=int(now - self.launched)))
-                    self.put(info_row, "SESSION ".ljust(9) + session, DIM, column=3)
-                    self.put(info_row + 1, "QUEUE".ljust(9) + f"{queue} new", VIT if queue else DIM, column=3)
+                    self.put(bottom - 2, "SESSION ".ljust(9) + session, DIM, column=3)
             else:
                 cpu = stats.get("cpu")
                 parts = [f"CPU {'--' if cpu is None else f'{cpu:.0f}%'}"]
@@ -1111,6 +1132,20 @@ class Deck:
                 selected = (selected - 1) % len(actions)
             if key in (curses.KEY_DOWN, ord("j")):
                 selected = (selected + 1) % len(actions)
+            if key in (ord("+"), ord("="), ord("-"), ord("m")) and shutil.which("wpctl"):
+                if key == ord("m"):
+                    wpctl("set-mute", "@DEFAULT_AUDIO_SINK@", "toggle")
+                else:
+                    wpctl("set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "5%" + ("-" if key == ord("-") else "+"))
+                _, volume, muted = audio_default()
+                if volume is not None:
+                    self.audio.update(volume=volume, muted=muted)
+                    flash, flash_until = ("MUTED" if muted else f"VOLUME {volume}%"), now + 2.5
+                    flash_tag, flash_tail = f" {self.g['note']} ", "  " + self.audio.get("sink", "")
+            if key == ord("b"):
+                for index, (alias, _, _) in enumerate(actions):
+                    if alias == "bluetooth":
+                        return index
             if key == ord("/"):
                 aliases = [alias for alias, _, _ in actions] + ["help"]
                 command = self.ask("DECK COMMAND // type a module name", prefix="/", completions=aliases)
@@ -1138,11 +1173,18 @@ class Deck:
             ("ssh", "SSH utilities", self.ssh),
             ("news", "News wire", self.news),
             ("settings", "Settings", self.settings),
+            ("bluetooth", "Bluetooth & sound", self.bluetooth),
             ("vitals", "System vitals", self.system),
             ("sheets", "Character sheets", lambda: self.view(
                 "CHARACTER SHEETS", "Reserved.\n\nSlot allocated for a future module.")),
             ("exit", "Jack out", self.power),
         ]
+        if self.preferences["bt_auto"] and shutil.which("bluetoothctl"):
+            try:  # reconnect the chosen headphones in the background
+                subprocess.Popen(["bluetoothctl", "connect", self.preferences["bt_auto"]], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError:
+                pass
         if self.preferences["download"] and ytdlp_path():
             spawn_worker()  # resume downloads interrupted by a shutdown
         if self.preferences["boot"]:
@@ -1684,6 +1726,211 @@ class Deck:
                         "Update yt-dlp in Video player, then try again. " + ytdlp_status(), ok=False)
         return code == 0
 
+    def audio_monitor(self):
+        """Background thread: refresh the connected Bluetooth device and sound output every few seconds."""
+        while True:
+            state = {}
+            try:
+                if shutil.which("bluetoothctl"):
+                    connected = bt_devices("Connected")
+                    state["bt"] = connected[0][1] if connected else ""
+                if shutil.which("wpctl"):
+                    sink, volume, muted = audio_default()
+                    names = {item["id"]: item for item in audio_sinks()} if sink is not None else {}
+                    if sink in names:
+                        state.update(sink=names[sink]["desc"], volume=volume, muted=muted)
+            except Exception:  # never let the monitor take the deck down
+                pass
+            self.audio = state
+            time.sleep(5)
+
+    def save_pref(self, **changes):
+        settings = dict(self.preferences, **changes)
+        save_settings(settings)
+        self.preferences = settings
+
+    def bluetooth(self):
+        """Pair and connect Bluetooth devices and pick where sound goes."""
+        selected = 0
+        while True:
+            missing = [tool for tool in ("bluetoothctl", "wpctl", "pw-dump") if not shutil.which(tool)]
+            adapter = bt_adapter() if "bluetoothctl" not in missing else {}
+            powered = adapter.get("Powered") == "yes"
+            sink, volume, muted = audio_default() if "wpctl" not in missing else (None, None, False)
+            sinks = audio_sinks() if "pw-dump" not in missing else []
+            current = next((item["desc"] for item in sinks if item["id"] == sink), "unknown")
+            intro = []
+            options = []
+            if missing:
+                intro.append("Bluetooth sound needs: " + ", ".join(missing) + ".")
+                options.append(("Install Bluetooth & sound support", self.bt_install))
+            if "bluetoothctl" not in missing:
+                if not adapter:
+                    intro.append("No Bluetooth adapter found. Check: sudo systemctl status bluetooth")
+                elif bt_blocked():
+                    intro.append("Bluetooth is blocked (rfkill).")
+                    options.append(("Unblock Bluetooth", lambda: self.run(["sudo", "rfkill", "unblock", "bluetooth"])))
+                else:
+                    connected = bt_devices("Connected") if powered else []
+                    intro.append("Bluetooth " + ("on" if powered else "off") + (
+                        f"  {self.g['sep']}  connected: " + ", ".join(name for _, name in connected) if connected else ""))
+                    options.append(("Turn Bluetooth " + ("off" if powered else "on"), lambda: self.bt_power(not powered)))
+                    if powered:
+                        options[0:0] = [("Scan for devices", self.bt_scan), ("Paired devices", self.bt_paired)]
+            if volume is not None:
+                intro.append(f"Sound: {current}  {self.g['sep']}  " + ("muted" if muted else f"{volume}%"))
+                options += [("Sound output", lambda: self.sound_output(sinks, sink)),
+                            ("Volume / " + ("muted" if muted else f"{volume}%"), self.volume_menu)]
+            if self.telemetry.link[0] and self.telemetry.link[0].startswith("wl"):
+                intro.append("Tip: Wi-Fi and Bluetooth share one radio on the Pi 3B; sound may crackle "
+                             "while Wi-Fi is busy. Downloaded videos sound best.")
+            choice = self.menu("BLUETOOTH & SOUND", [label for label, _ in options], intro=intro, selected=selected)
+            if choice is None:
+                return
+            selected = choice
+            options[choice][1]()
+
+    def bt_install(self):
+        args = ["sudo", "apt-get", "install", "--no-install-recommends", *BT_PACKAGES]
+        if self.confirm("BLUETOOTH // install", args):
+            self.run(args)
+            self.run(["systemctl", "--user", "enable", "--now", "pipewire.socket", "wireplumber.service"],
+                     pause=False)
+            self.notice("BLUETOOTH", "Installed. If sound devices don't show up, reboot the deck once.")
+
+    def bt_power(self, on):
+        code, out = self.busy("BLUETOOTH", "Turning Bluetooth " + ("on" if on else "off"),
+                              lambda: btctl("power", "on" if on else "off"))
+        if code and on:
+            hint = " It is blocked: choose Unblock Bluetooth." if "Blocked" in out or bt_blocked() else ""
+            self.notice("BLUETOOTH", "Could not turn Bluetooth on." + hint, ok=False)
+
+    def bt_scan(self):
+        paired = {mac for mac, _ in bt_devices("Paired")}
+
+        def scan():
+            btctl("--timeout", "12", "scan", "on", timeout=25)
+            found = []
+            for mac, name in bt_devices():
+                if mac in paired or not name or re.fullmatch(r"[0-9A-F]{2}(?:-[0-9A-F]{2}){5}", name):
+                    continue
+                info = bt_info(mac)
+                # BlueZ prints "RSSI: 0xffffffd0 (-48)" (newer) or "RSSI: -48" (older)
+                raw = info.get("RSSI", "")
+                rssi = re.search(r"\((-?\d+)\)", raw) or re.fullmatch(r"\s*(-?\d+)\s*", raw)
+                found.append((int(rssi.group(1)) if rssi else -999, mac, info.get("Name") or name, info["kind"]))
+            return sorted(found, reverse=True)
+        found = self.busy("BLUETOOTH // scanning", "Scanning for 12 seconds. Put your device in pairing mode now.",
+                          scan)
+        if not found:
+            self.notice("BLUETOOTH", "No new devices found. Put the device in pairing mode (often: hold the "
+                        "power button until the light flashes) and scan again.", ok=False)
+            return
+        labels = [f"{name}" + (f"  [{kind}]" if kind else "") + (f"  {rssi} dBm" if rssi > -999 else "")
+                  for rssi, mac, name, kind in found]
+        choice = self.menu("BLUETOOTH // found " + str(len(found)), labels,
+                           intro=["Choose a device to pair and connect. Nearest first."])
+        if choice is not None:
+            _, mac, name, _ = found[choice]
+            self.bt_pair(mac, name)
+
+    def bt_pair(self, mac, name):
+        self.run(["bluetoothctl", "--timeout", "40", "pair", mac], pause=False)
+        if bt_info(mac).get("Paired") != "yes":
+            self.notice("BLUETOOTH", f"Pairing with {name} did not finish. Put it in pairing mode and try again. "
+                        "If it asked for a PIN, type it on the device.", ok=False)
+            return
+        btctl("trust", mac)
+        self.bt_connect(mac, name)
+
+    def bt_connect(self, mac, name):
+        def connect():
+            btctl("connect", mac, timeout=30)
+            info = bt_info(mac)
+            if info.get("Connected") != "yes":
+                return False, info
+            if info["kind"] in ("headphones", "speaker"):
+                for _ in range(16):  # PipeWire adds the Bluetooth output a moment after connecting
+                    sink = next((item for item in audio_sinks() if item["bt"] and
+                                 (item["desc"] == info.get("Alias") or item["desc"] == name)), None) or \
+                        next((item for item in audio_sinks() if item["bt"]), None)
+                    if sink:
+                        wpctl("set-default", str(sink["id"]))
+                        return True, info
+                    time.sleep(0.5)
+            return True, info
+        ok, info = self.busy("BLUETOOTH", f"Connecting to {name}", connect)
+        if not ok:
+            self.notice("BLUETOOTH", f"Could not connect to {name}. Make sure it is on and nearby.", ok=False)
+            return
+        sound = info["kind"] in ("headphones", "speaker")
+        self.notice("BLUETOOTH", f"Connected to {name}." + (" Sound now plays there." if sound else ""))
+
+    def bt_paired(self):
+        selected = 0
+        while True:
+            devices = bt_devices("Paired")
+            if not devices:
+                self.notice("BLUETOOTH", "No paired devices yet. Choose Scan for devices.", ok=False)
+                return
+            infos = [bt_info(mac) for mac, _ in devices]
+            labels = [(self.g["on"] if info.get("Connected") == "yes" else self.g["off"]) + f" {name}"
+                      + (f"  [{info['kind']}]" if info["kind"] else "")
+                      + (f"  {info['battery']}%" if info["battery"] else "")
+                      + ("  auto" if mac == self.preferences["bt_auto"] else "")
+                      for (mac, name), info in zip(devices, infos)]
+            choice = self.menu("BLUETOOTH // paired", labels, selected=selected)
+            if choice is None:
+                return
+            selected = choice
+            (mac, name), info = devices[choice], infos[choice]
+            connected = info.get("Connected") == "yes"
+            options = [("Disconnect" if connected else "Connect",
+                        (lambda: self.busy("BLUETOOTH", f"Disconnecting {name}", lambda: btctl("disconnect", mac)))
+                        if connected else (lambda: self.bt_connect(mac, name)))]
+            sink = next((item for item in audio_sinks() if item["bt"]), None) if connected else None
+            if sink:
+                options.append(("Use for sound", lambda: wpctl("set-default", str(sink["id"]))))
+            auto = mac == self.preferences["bt_auto"]
+            options += [("Auto-connect at startup: " + ("on" if auto else "off"),
+                         lambda: self.save_pref(bt_auto="" if auto else mac)),
+                        ("Forget this device", lambda: (btctl("remove", mac),
+                                                        self.save_pref(bt_auto="") if auto else None)),
+                        ("Back", lambda: None)]
+            intro = [f"{name}  {self.g['sep']}  {mac}" + (f"  {self.g['sep']}  {info['kind']}" if info["kind"] else ""),
+                     ("Connected" if connected else "Not connected")
+                     + (f"  {self.g['sep']}  battery {info['battery']}%" if info["battery"] else "")]
+            action = self.menu("BLUETOOTH // " + name[:40], [label for label, _ in options], intro=intro)
+            if action is not None:
+                options[action][1]()
+
+    def sound_output(self, sinks, current):
+        if not sinks:
+            self.notice("SOUND", "No sound outputs found. Is PipeWire running? Try rebooting the deck.", ok=False)
+            return
+        labels = [(self.g["on"] if item["id"] == current else self.g["off"]) + " " + item["desc"]
+                  + ("  [Bluetooth]" if item["bt"] else "") for item in sinks]
+        choice = self.menu("SOUND // output", labels, intro=["Where Nightdeck and videos play sound."])
+        if choice is not None:
+            wpctl("set-default", str(sinks[choice]["id"]))
+
+    def volume_menu(self):
+        selected = 0
+        while True:
+            _, volume, muted = audio_default()
+            if volume is None:
+                return
+            choice = self.menu("SOUND // " + ("muted" if muted else f"{volume}%"),
+                               ["Volume up 10%", "Volume down 10%", "Unmute" if muted else "Mute"],
+                               intro=["On the dashboard: + and - change volume, m mutes."], selected=selected)
+            if choice is None:
+                return
+            selected = choice
+            if choice == 2:
+                wpctl("set-mute", "@DEFAULT_AUDIO_SINK@", "toggle")
+            else:
+                wpctl("set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "10%" + ("+" if choice == 0 else "-"))
+
     def claude(self):
         """Claude Code: run it here on 64-bit hardware, or on a bigger machine over SSH."""
         machine = os.uname().machine
@@ -1894,6 +2141,99 @@ class Deck:
     def notes(self):
         NOTES.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.file_pick(NOTES, notes=True)
+
+
+BT_MAC = re.compile(r"[0-9A-F]{2}(?::[0-9A-F]{2}){5}")
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x01|\x02")
+BT_KINDS = {"audio-headset": "headphones", "audio-headphones": "headphones", "audio-card": "speaker",
+            "input-keyboard": "keyboard", "input-mouse": "mouse", "input-gaming": "controller",
+            "input-tablet": "tablet", "phone": "phone", "computer": "computer"}
+BT_PACKAGES = ["bluez", "pipewire", "wireplumber", "libspa-0.2-bluetooth", "rfkill"]
+
+
+def btctl(*args, timeout=15):
+    """Run one bluetoothctl command; returns (exit code, output without colors)."""
+    try:
+        result = subprocess.run(["bluetoothctl", *args], capture_output=True, text=True, timeout=timeout,
+                                stdin=subprocess.DEVNULL, check=False, errors="replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return 1, ""
+    return result.returncode, ANSI.sub("", result.stdout + result.stderr)
+
+
+def bt_devices(kind=None):
+    """[(mac, name)] for all known, or 'Paired' / 'Connected' devices."""
+    _, out = btctl("devices", *([kind] if kind else []))
+    devices = []
+    for line in out.splitlines():
+        match = re.match(r"^\s*Device (" + BT_MAC.pattern + r") (.*)$", line.strip())
+        if match:
+            devices.append((match.group(1), clean(match.group(2))[:60]))
+    return devices
+
+
+def bt_info(mac):
+    if not BT_MAC.fullmatch(mac):
+        return {}
+    _, out = btctl("info", mac)
+    info = {}
+    for line in out.splitlines():
+        key, sep, value = line.strip().partition(": ")
+        if sep and key and key not in info:
+            info[key] = clean(value)[:80]
+    battery = re.search(r"\((\d+)\)", info.get("Battery Percentage", ""))
+    info["battery"] = battery.group(1) if battery else ""
+    info["kind"] = BT_KINDS.get(info.get("Icon", ""), "")
+    return info
+
+
+def bt_adapter():
+    code, out = btctl("show")
+    if code or "Controller" not in out:
+        return {}
+    return {key: value for key, _, value in (line.strip().partition(": ") for line in out.splitlines()) if value}
+
+
+def bt_blocked():
+    for kind in Path("/sys/class/rfkill").glob("rfkill*"):
+        try:
+            if (kind / "type").read_text().strip() == "bluetooth" and (kind / "soft").read_text().strip() == "1":
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def audio_sinks():
+    """[{id, desc, bt}] audio outputs from PipeWire."""
+    try:
+        raw = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=8, check=False).stdout
+        objects = json.loads(raw) if raw.strip() else []
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return []
+    sinks = []
+    for obj in objects if isinstance(objects, list) else []:
+        props = ((obj or {}).get("info") or {}).get("props") or {}
+        if obj.get("type") == "PipeWire:Interface:Node" and props.get("media.class") == "Audio/Sink":
+            sinks.append({"id": int(obj.get("id", 0)), "bt": props.get("device.api") == "bluez5",
+                          "desc": clean(str(props.get("node.description") or props.get("node.name") or "?"))[:60]})
+    return sinks
+
+
+def wpctl(*args):
+    try:
+        return subprocess.run(["wpctl", *args], capture_output=True, text=True, timeout=8, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def audio_default():
+    """(sink id or None, volume percent or None, muted)."""
+    match = re.search(r"id (\d+)", wpctl("inspect", "@DEFAULT_AUDIO_SINK@"))
+    volume = re.search(r"Volume: ([0-9.]+)(.*)", wpctl("get-volume", "@DEFAULT_AUDIO_SINK@"))
+    return (int(match.group(1)) if match else None,
+            round(float(volume.group(1)) * 100) if volume else None,
+            bool(volume and "MUTED" in volume.group(2)))
 
 
 def load_watch():

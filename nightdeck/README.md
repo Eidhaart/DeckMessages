@@ -23,7 +23,7 @@ cd nightdeck
 ~/.local/bin/nightdeck
 ```
 
-Setup uses sudo for Debian packages and the console autologin only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano, the w3m text browser, mpv and ffmpeg, then tries micro and QuickJS. It then downloads the current yt-dlp release into `~/.local/bin`. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves your login shell alone. It replaces the Nightdeck executable and the marked autostart block in your login profile (see below). To remove the executable, delete `~/.local/bin/nightdeck`.
+Setup uses sudo for Debian packages and the console autologin only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano, the w3m text browser, mpv and ffmpeg, then tries micro, QuickJS and the Bluetooth audio stack. It then downloads the current yt-dlp release into `~/.local/bin`. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves your login shell alone. It replaces the Nightdeck executable and the marked autostart block in your login profile (see below). To remove the executable, delete `~/.local/bin/nightdeck`.
 
 ## Autostart and jack out
 
@@ -104,6 +104,13 @@ The dashboard borrows the split navigation, clock and command prompt from [DeckM
   ```
 
   Then run `deck-add 'https://www.youtube.com/watch?v=...'`. Put each link in single quotes, because `?` and `&` mean something to your shell. Run `deck-add` with no link to paste several, one per line, and finish with **Ctrl+D**. Links go to the Pi through stdin, so SSH never reinterprets them. With an SSH key set up (`ssh-copy-id deck@nightdeck.local`), you won't need a password.
+- **Bluetooth & sound** (**b** on the dashboard, or `/bluetooth`). Connect Bluetooth headphones and speakers, plus keyboards and game controllers, and choose where sound plays.
+  - **Scan for devices** searches for 12 seconds. Put the device in pairing mode first; usually that means holding the power button until a light flashes. Named devices are listed nearest first, with their type.
+  - **Pairing:** choose a device to pair it. If the device asks for a PIN or confirmation, answer it in the terminal that opens. Nightdeck then trusts and connects it. Headphones and speakers become the sound output straight away, and videos play through them.
+  - **Paired devices** lists each device with `●` when connected and its battery level when the device reports one. A device can be connected or disconnected, used for sound, set to auto-connect when Nightdeck starts, or forgotten. Trusted headphones usually reconnect by themselves when switched on.
+  - **Sound output** chooses between HDMI, the headphone jack and Bluetooth. **Volume** sets the level and mute. On the dashboard, **+** and **-** change the volume by 5%, **m** mutes, and the level flashes on the ticker. The header shows `♪ name` while a device is connected, and the vitals panel shows the current output and volume (**SND**).
+  - Setup installs BlueZ, PipeWire, WirePlumber, the PipeWire Bluetooth plugin and rfkill, and adds you to the `bluetooth` group. Reboot once after setup. Without those, the module offers **Install Bluetooth & sound support**. If Bluetooth is soft-blocked, it offers **Unblock Bluetooth**.
+  - **Pi 3B limits.** Wi-Fi and Bluetooth share one radio, so audio can crackle while Wi-Fi is busy, for example when streaming. Downloaded videos sound best, and Ethernet or a USB Bluetooth dongle avoids the problem. Bluetooth adds a little audio delay, which mpv compensates for in video. Headset microphones and calls aren't supported.
 - **System vitals.** The full telemetry view sits unnumbered below Settings and opens with `/vitals`. The dashboard panel shows the same readings live.
 - **Character sheets.** Reserved menu entry. It sits unnumbered below Settings and opens with `/sheets`.
 

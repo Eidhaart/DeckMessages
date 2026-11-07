@@ -24,6 +24,9 @@ if [ "$packages" -eq 1 ]; then
     fi
     # YouTube needs a JavaScript runtime for yt-dlp; QuickJS is the one that runs on 32-bit Pi OS.
     sudo apt-get install --no-install-recommends quickjs || printf '%s\n' 'Skipping QuickJS: YouTube may not play.'
+    # Bluetooth headphones and speakers: PipeWire + WirePlumber with the BlueZ plugin.
+    sudo apt-get install --no-install-recommends bluez pipewire wireplumber libspa-0.2-bluetooth rfkill \
+        || printf '%s\n' 'Skipping Bluetooth audio packages.'
 fi
 install -d "$HOME/.local/bin"
 temp=$(mktemp "$HOME/.local/bin/.nightdeck.XXXXXX")
@@ -32,6 +35,11 @@ install -m 0755 nightdeck.py "$temp"
 mv -fT -- "$temp" "$HOME/.local/bin/nightdeck"
 # Debian's yt-dlp falls behind YouTube; install the official release (checksum-verified) per user.
 python3 "$HOME/.local/bin/nightdeck" update-ytdlp || printf '%s\n' 'yt-dlp update failed; retry later from Video player > Update yt-dlp.'
+
+# Bluetooth control over D-Bus needs the bluetooth group (takes effect at the next login).
+if getent group bluetooth >/dev/null && ! id -nG | tr ' ' '\n' | grep -qx bluetooth; then
+    sudo usermod -aG bluetooth "$(id -un)" && printf '%s\n' 'Added you to the bluetooth group. Reboot or log in again.'
+fi
 
 # Console boot: log this user in on the Pi's own screen (tty1) so the deck opens there.
 user=$(id -un)

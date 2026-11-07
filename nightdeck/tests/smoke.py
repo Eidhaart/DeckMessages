@@ -250,5 +250,136 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         os.environ["PATH"] = saved
 
+# 9. Bluetooth & sound: scan, pair, connect headphones, sound switches to them, volume keys
+FAKE_BT = r"""#!/usr/bin/env python3
+import json, os, sys, time
+state_file = os.path.join(os.environ["HOME"], "bt.json")
+pool = {"AA:BB:CC:00:00:01": {"name": "WH-1000XM4", "icon": "audio-headset", "rssi": -48},
+        "AA:BB:CC:00:00:02": {"name": "MX Keys", "icon": "input-keyboard", "rssi": -60}}
+try:
+    st = json.load(open(state_file))
+except OSError:
+    st = {"powered": True, "known": {}}
+a = sys.argv[1:]
+if a[:1] == ["--timeout"]:
+    a = a[2:]
+cmd, rest = (a[0], a[1:]) if a else ("", [])
+known = st["known"]
+if cmd == "show":
+    print("Controller B8:27:EB:00:00:00 (public)\n\tName: nightdeck\n\tPowered: " + ("yes" if st["powered"] else "no"))
+elif cmd == "power":
+    st["powered"] = rest[0] == "on"; print("Changing power " + rest[0] + " succeeded")
+elif cmd == "devices":
+    for mac, d in known.items():
+        if not rest or (rest[0] == "Paired" and d.get("paired")) or (rest[0] == "Connected" and d.get("connected")):
+            print(f"Device {mac} {d['name']}")
+elif cmd == "scan":
+    for mac, d in pool.items():
+        known.setdefault(mac, dict(d)); print(f"\x1b[0;93m[NEW]\x1b[0m Device {mac} {d['name']}")
+    time.sleep(0.3)
+elif cmd == "info":
+    d = known.get(rest[0])
+    if not d:
+        print("Device " + rest[0] + " not available"); sys.exit(1)
+    yn = lambda v: "yes" if v else "no"
+    print(f"Device {rest[0]} (public)\n\tName: {d['name']}\n\tAlias: {d['name']}\n\tIcon: {d['icon']}\n"
+          f"\tPaired: {yn(d.get('paired'))}\n\tTrusted: {yn(d.get('trusted'))}\n\tConnected: {yn(d.get('connected'))}\n"
+          f"\tRSSI: 0xffffffd0 ({d['rssi']})" + ("\n\tBattery Percentage: 0x50 (80)" if d.get("connected") else ""))
+elif cmd == "pair":
+    known[rest[0]]["paired"] = True; print("Attempting to pair with " + rest[0] + "\nPairing successful")
+elif cmd == "trust":
+    known[rest[0]]["trusted"] = True
+elif cmd == "connect":
+    known[rest[0]]["connected"] = True; print("Connection successful")
+elif cmd == "disconnect":
+    known[rest[0]]["connected"] = False
+elif cmd == "remove":
+    known.pop(rest[0], None)
+json.dump(st, open(state_file, "w"))
+"""
+FAKE_PWDUMP = r"""#!/usr/bin/env python3
+import json, os
+try:
+    st = json.load(open(os.path.join(os.environ["HOME"], "bt.json")))
+except OSError:
+    st = {"known": {}}
+nodes = [{"id": 40, "type": "PipeWire:Interface:Node",
+          "info": {"props": {"media.class": "Audio/Sink", "node.description": "Built-in Audio HDMI", "device.api": "alsa"}}}]
+for mac, d in st["known"].items():
+    if d.get("connected") and d["icon"].startswith("audio"):
+        nodes.append({"id": 77, "type": "PipeWire:Interface:Node",
+                      "info": {"props": {"media.class": "Audio/Sink", "node.description": d["name"], "device.api": "bluez5"}}})
+print(json.dumps(nodes))
+"""
+FAKE_WPCTL = r"""#!/usr/bin/env python3
+import json, os, sys
+path = os.path.join(os.environ["HOME"], "wp.json")
+try:
+    st = json.load(open(path))
+except OSError:
+    st = {"default": 40, "volume": 0.40, "muted": False}
+a = sys.argv[1:]
+if a[0] == "inspect":
+    print(f"id {st['default']}, type PipeWire:Interface:Node")
+elif a[0] == "get-volume":
+    print(f"Volume: {st['volume']:.2f}" + (" [MUTED]" if st["muted"] else ""))
+elif a[0] == "set-volume":
+    step = a[-1]
+    delta = float(step[:-2]) / 100 * (1 if step.endswith("+") else -1)
+    st["volume"] = round(min(1.0, max(0.0, st["volume"] + delta)), 2)
+elif a[0] == "set-mute":
+    st["muted"] = not st["muted"]
+elif a[0] == "set-default":
+    st["default"] = int(a[1])
+json.dump(st, open(path, "w"))
+"""
+with tempfile.TemporaryDirectory() as home:
+    fake = Path(home, "bin")
+    fake.mkdir()
+    for name, body in (("bluetoothctl", FAKE_BT), ("pw-dump", FAKE_PWDUMP), ("wpctl", FAKE_WPCTL)):
+        (fake / name).write_text(body)
+        (fake / name).chmod(0o755)
+    s = Session(80, 24, home=home, env={"PATH": f"{fake}:{os.environ['PATH']}"})
+    s.pump(0.6)
+    s.send("x", 1.0)
+    check("dashboard shows volume keys", "+/-" in s.text())
+    s.send("b", 1.5)
+    menu_text = s.text()
+    check("b opens Bluetooth & sound", "BLUETOOTH & SOUND" in menu_text and "Bluetooth on" in menu_text
+          and "Built-in Audio HDMI" in menu_text and "40%" in menu_text)
+    s.send("\r", 3.0)
+    found = s.text()
+    check("scan lists named devices nearest first", "WH-1000XM4  [headphones]  -48 dBm" in found
+          and found.index("WH-1000XM4") < found.index("MX Keys"))
+    s.send("\r", 4.0)
+    wp = json.loads(Path(home, "wp.json").read_text()) if Path(home, "wp.json").exists() else {}
+    check("pairing connects and switches sound to headphones",
+          "Connected to WH-1000XM4. Sound now plays there." in s.text() and wp.get("default") == 77)
+    bt = json.loads(Path(home, "bt.json").read_text())["known"]["AA:BB:CC:00:00:01"]
+    check("headphones paired and trusted", bt.get("paired") and bt.get("trusted") and bt.get("connected"))
+    s.send("\r", 1.5)
+    check("menu shows connected device and its output", "connected: WH-1000XM4" in s.text()
+          and "Sound: WH-1000XM4" in s.text())
+    for key, wait in [(DOWN, 0.2), ("\r", 2.0)]:
+        s.send(key, wait)
+    check("paired list shows battery", "● WH-1000XM4  [headphones]  80%" in s.text())
+    for key, wait in [("\r", 1.5), (DOWN * 2, 0.2), ("\r", 1.0)]:
+        s.send(key, wait)
+    prefs = json.loads(Path(home, ".config/nightdeck/settings.json").read_text())
+    check("auto-connect at startup saved", prefs.get("bt_auto") == "AA:BB:CC:00:00:01")
+    for key, wait in [("\x1b", 0.6), ("\x1b", 0.6)]:
+        s.send(key, wait)
+    s.pump(6.0)
+    check("header shows connected headphones", "♪ WH-1000XM4" in s.text())
+    check("vitals show the sound output", "SND  WH-1000XM4 40%" in s.text())
+    s.send("+", 0.8)
+    check("+ raises volume with a flash", "VOLUME 45%" in s.raw.decode("utf-8", "replace")
+          and json.loads(Path(home, "wp.json").read_text())["volume"] == 0.45)
+    s.send("m", 0.8)
+    check("m mutes", json.loads(Path(home, "wp.json").read_text())["muted"] is True)
+    for key, wait in QUIT:
+        s.send(key, wait)
+    check("bluetooth session exits cleanly", s.finish() == 0)
+
 print("\n" + ("ALL PASSED" if not failures else f"{len(failures)} FAILED"))
 sys.exit(1 if failures else 0)
