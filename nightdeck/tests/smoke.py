@@ -129,50 +129,103 @@ with tempfile.TemporaryDirectory() as home:
         s.send(key, wait)
     check("video module exits cleanly", s.finish() == 0)
 
-# 7. Watch list: links sent with `nightdeck add` appear live and play from the list
+# 7. Watch list: links sent with `nightdeck add` download in the background, appear live and can be removed
+FAKE_YTDLP = """#!/usr/bin/env python3
+import sys, time
+a = sys.argv[1:]
+if "--version" in a:
+    print("2026.10.26"); sys.exit()
+url = a[-1]
+if "broken" in url:
+    print("ERROR: [generic] Video unavailable", file=sys.stderr); sys.exit(1)
+vid = url.split("v=")[-1].split("&")[0] if "v=" in url else url.rstrip("/").split("/")[-1]
+if "-o" not in a:
+    print("Title of " + vid); sys.exit()
+title = "Title of " + vid
+path = a[a.index("-o") + 1].replace("%(title).80B", title).replace("%(id)s", vid).replace("%(ext)s", "mp4")
+print("TITLE " + title, flush=True)
+for n in (30, 60, 100):
+    print(f"PROG {n} 100", flush=True); time.sleep(0.1)
+open(path, "wb").write(bytes(2048))
+print("FILE " + path, flush=True)
+"""
+
+
+def wait_for(condition, seconds=15):
+    end = time.time() + seconds
+    while time.time() < end:
+        if condition():
+            return True
+        time.sleep(0.2)
+    return False
+
+
 with tempfile.TemporaryDirectory() as home:
     fake = Path(home, "bin")
     fake.mkdir()
     (fake / "mpv").write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$HOME/mpv.args"\n')
-    (fake / "yt-dlp").write_text('#!/bin/sh\nfor a; do last=$a; done\necho "Title of ${last##*=}"\n')
+    (fake / "yt-dlp").write_text(FAKE_YTDLP)
     (fake / "qjs").write_text("#!/bin/sh\n")
     for tool in ("mpv", "yt-dlp", "qjs"):
         (fake / tool).chmod(0o755)
     env = dict(os.environ, HOME=home, PATH=f"{fake}:{os.environ['PATH']}")
     app = str(Path(__file__).resolve().parent.parent / "nightdeck.py")
-    links = "https://www.youtube.com/watch?v=abc&t=10\nnot a link\nhttps://example.com/b?v=xyz\n"
-    out = subprocess.run([sys.executable, app, "add"], input=links, capture_output=True, text=True, env=env)
+    downloads = Path(home, "Videos", "watchlist")
+
+    def cli(*args, **kw):
+        return subprocess.run([sys.executable, app, *args], capture_output=True, text=True, env=env, **kw)
+
+    def listing():
+        return cli("list").stdout
+    out = cli("add", input="https://www.youtube.com/watch?v=abc&t=10\nnot a link\nhttps://example.com/b?v=xyz\n")
     check("add via stdin keeps ? and & intact", "queued   https://www.youtube.com/watch?v=abc&t=10" in out.stdout
           and "skipped  not a link" in out.stdout and out.returncode == 1)
-    out = subprocess.run([sys.executable, app, "add", "https://www.youtube.com/watch\\?v\\=zsh1\\&t\\=5"],
-                         capture_output=True, text=True, env=env)
+    out = cli("add", "https://www.youtube.com/watch\\?v\\=zsh1\\&t\\=5")
     check("zsh paste backslashes stripped", "queued   https://www.youtube.com/watch?v=zsh1&t=5" in out.stdout)
-    out = subprocess.run([sys.executable, app], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    cli("add", "https://example.com/broken")
+    out = cli(stdin=subprocess.DEVNULL)
     check("no terminal gives a clear message", out.returncode == 2 and "needs a terminal" in out.stderr
           and "Traceback" not in out.stderr)
-    time.sleep(1.5)
-    listing = subprocess.run([sys.executable, app, "list"], capture_output=True, text=True, env=env).stdout
-    check("titles fetched in the background", "Title of abc&t" in listing or "Title of 10" in listing)
+    check("links download in the background",
+          wait_for(lambda: listing().count("ready") == 3 and "failed" in listing()))
+    check("downloads saved as 480p files", len(list(downloads.glob("*.mp4"))) == 3)
+    check("titles come from the download", "Title of abc" in listing())
     s = Session(80, 24, home=home, env={"PATH": env["PATH"], "DISPLAY": "", "WAYLAND_DISPLAY": ""})
     s.pump(0.6)
     s.send("x", 1.2)
-    check("dashboard shows queue count", "QUEUE    3 new" in s.text())
-    subprocess.run([sys.executable, app, "add", "https://example.com/c?v=live"], capture_output=True, env=env)
-    s.pump(1.5)
-    check("new link flashes on the dashboard", "NEW LINK" in s.text() and "QUEUE    4 new" in s.text())
-    for key, wait in [("6", 0.6), ("\r", 0.6), ("\r", 1.0)]:
+    check("dashboard shows queue count", "QUEUE    4 new" in s.text())
+    cli("add", "https://example.com/c?v=live")
+    s.pump(0.8)
+    check("new link flashes on the dashboard", b"NEW LINK" in s.raw and "QUEUE    5 new" in s.text())
+    s.pump(2.5)
+    check("finished download flashes READY", "READY " in s.raw.decode("utf-8", "replace")
+          and "Title of live" in s.raw.decode("utf-8", "replace"))
+    for key, wait in [("6", 0.6), ("\r", 0.8)]:
         s.send(key, wait)
+    check("watch list shows download badges", "✓" in s.text() and "!" in s.text() and "4 downloaded" in s.text())
+    s.send("\r", 1.0)
     played = Path(home, "mpv.args").read_text().splitlines() if Path(home, "mpv.args").exists() else []
-    check("play all new sends every link to mpv", played[-4:] == [
-        "https://example.com/c?v=live", "https://www.youtube.com/watch?v=zsh1&t=5",
-        "https://example.com/b?v=xyz", "https://www.youtube.com/watch?v=abc&t=10"])
+    targets = played[played.index("--") + 1:] if "--" in played else []
+    check("play all new uses downloads, streams the rest",
+          [Path(t).name for t in targets] == ["Title of live [live].mp4", "broken", "Title of zsh1 [zsh1].mp4",
+                                               "Title of xyz [xyz].mp4", "Title of abc [abc].mp4"]
+          and targets[1] == "https://example.com/broken")
     check("mpv is pointed at our yt-dlp", any(arg == "--script-opts-append=ytdl_hook-ytdl_path=" + str(fake / "yt-dlp")
                                               for arg in played))
-    check("played links marked watched", "WATCH LIST // 0 new" in s.text())
+    check("played links marked watched", "0 new" in s.text())
+    for key, wait in [(DOWN, 0.2), ("\r", 0.8)]:
+        s.send(key, wait)
+    check("delete watched downloads frees the files", not list(downloads.glob("*.mp4"))
+          and "0 downloaded" in s.text() and listing().count("deleted") == 4)
     for key, wait in [("\x1b", 0.4), ("\x1b", 0.4)] + QUIT:
         s.send(key, wait)
     check("watch list exits cleanly", s.finish() == 0)
-    out = subprocess.run([sys.executable, app, "clear"], capture_output=True, text=True, env=env)
+    cli("add", "https://example.com/d?v=keep")
+    wait_for(lambda: (downloads / "Title of keep [keep].mp4").exists())
+    out = cli("remove", "1")
+    check("remove deletes that download", "Title of keep" in out.stdout
+          and not (downloads / "Title of keep [keep].mp4").exists())
+    out = cli("clear")
     check("clear removes watched", "0 left" in out.stdout)
 
 # 8. YouTube needs a JavaScript runtime: QuickJS is enabled only for a new enough yt-dlp

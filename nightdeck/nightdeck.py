@@ -55,6 +55,13 @@ CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash"
 VIDEOS = HOME / "Videos"
 WATCH = DATA / "watchlist.json"
 YTDLP_LOCAL = HOME / ".local/bin/yt-dlp"
+DOWNLOADS = VIDEOS / "watchlist"
+DL_STATES = ("", "downloading", "ready", "failed", "deleted")
+DL_MIN_FREE = 500 * 1024 * 1024
+# 480p H.264 + AAC in MP4: fits the 800x480 panel and plays with hardware decoding on a Pi 3B.
+DL_FORMAT_MERGE = ("bestvideo[height<=?480][vcodec^=avc1]+bestaudio[ext=m4a]/"
+                   "best[height<=?480][vcodec^=avc1]/best[height<=?480]/best")
+DL_FORMAT_SINGLE = "best[height<=?480][vcodec^=avc1]/best[height<=?480]/best"
 YTDLP_RELEASE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
 WATCH_MAX = 500
 MEDIA_EXT = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".ts", ".ogv", ".flv",
@@ -73,6 +80,7 @@ GLYPHS = {
         "full": "█", "empty": "░", "spark": "▁▂▃▄▅▆▇█", "spin": "▖▘▝▗", "ptr": "▶",
         "on": "●", "off": "○", "bar": "▌", "sep": "·", "up": "▲", "down": "▼",
         "noise": "▓▒░█▚▞▙▟", "keys": "↑↓", "wire": "///", "cursor": "█",
+        "ok": "✓", "dl": "↓", "wait": "…", "bad": "!",
         "logo": ("█▄ █ █ █▀▀ █ █ ▀█▀ █▀▄ █▀▀ █▀▀ █▄▀",
                  "█ ▀█ █ █▄█ █▀█  █  █▄▀ ██▄ █▄▄ █ █"),
     },
@@ -82,6 +90,7 @@ GLYPHS = {
         "full": "█", "empty": "░", "spark": "▄█", "spin": "░▒▓█", "ptr": "►",
         "on": "■", "off": "·", "bar": "▌", "sep": "·", "up": "▲", "down": "▼",
         "noise": "░▒▓█▀▄", "keys": "↑↓", "wire": "///", "cursor": "█",
+        "ok": "√", "dl": "↓", "wait": "·", "bad": "!",
         "logo": ("█▄ █ █ █▀▀ █ █ ▀█▀ █▀▄ █▀▀ █▀▀ █▄▀",
                  "█ ▀█ █ █▄█ █▀█  █  █▄▀ ██▄ █▄▄ █ █"),
     },
@@ -90,6 +99,7 @@ GLYPHS = {
         "full": "#", "empty": ".", "spark": "_.-=+*#@", "spin": "|/-\\", "ptr": ">",
         "on": "*", "off": "o", "bar": "|", "sep": "-", "up": "^", "down": "v",
         "noise": "#%@&$?!", "keys": "jk", "wire": "///", "cursor": "_",
+        "ok": "+", "dl": "v", "wait": ".", "bad": "!",
         "logo": ("|\\ | | /~~ |_| ~|~ |~\\ |~~ /~~ |/",
                  "| \\| | \\_/ | |  |  |_/ |__ \\__ |\\"),
     },
@@ -206,7 +216,7 @@ def repo_url(value):
 def load_settings():
     defaults = {"theme": "Cyberdeck", "custom": list(THEMES["Cyberdeck"]),
                 "fx": True, "boot": True, "glyphs": "auto", "claude_host": "", "claude_dir": "",
-                "video_out": "ask"}
+                "video_out": "ask", "download": True}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -221,6 +231,8 @@ def load_settings():
         isinstance(value, str) and COLOR.fullmatch(value) for value in custom
     ):
         defaults["custom"] = custom
+    if isinstance(saved.get("download"), bool):
+        defaults["download"] = saved["download"]
     if saved.get("video_out") in VIDEO_OUTPUTS:
         defaults["video_out"] = saved["video_out"]
     if isinstance(saved.get("claude_host"), str) and HOST.fullmatch(saved["claude_host"]):
@@ -572,7 +584,8 @@ class Deck:
 
     # ---------- widgets ----------
 
-    def menu(self, title, choices, intro=None, selected=0):
+    def menu(self, title, choices, intro=None, selected=0, poll=False):
+        """poll=True returns -1 about once a second so the caller can refresh (self.last_selected keeps place)."""
         if not choices:
             self.view(title, "No entries.")
             return None
@@ -612,7 +625,15 @@ class Deck:
                 self.put(row, self.g["up"], HINT, True, column=width - 2)
             if start + count < len(choices):
                 self.put(row + count - 1, self.g["down"], HINT, True, column=width - 2)
-            key = self.screen.getch()
+            if poll:
+                self.screen.timeout(1000)
+            try:
+                key = self.screen.getch()
+            finally:
+                self.screen.timeout(-1)
+            self.last_selected = selected
+            if poll and key == -1:
+                return -1
             if key in (27, ord("q")):
                 return None
             if key in (10, 13, curses.KEY_ENTER):
@@ -967,6 +988,7 @@ class Deck:
     def dashboard(self, actions, selected):
         self.load_wire()
         watch_stamp, flash, flash_until = None, "", 0.0
+        ready_seen = set()
         queue = 0
         self.shown_title = None
         glitch_at = time.monotonic() + random.uniform(2, 5)
@@ -1012,9 +1034,13 @@ class Deck:
             if stamp != watch_stamp:  # links sent with `nightdeck add` show up here live
                 items = load_watch()
                 fresh = [item for item in items if not item["done"]]
+                ready = {item["url"] for item in fresh if item["state"] == "ready"}
                 if watch_stamp is not None and len(fresh) > queue and fresh:
                     flash, flash_until = "NEW LINK " + self.g["ptr"] + " " + watch_label(fresh[0]), now + 10
-                watch_stamp, queue = stamp, len(fresh)
+                elif watch_stamp is not None and ready - ready_seen:
+                    done = next(item for item in fresh if item["url"] in ready - ready_seen)
+                    flash, flash_until = "READY " + self.g["ok"] + " " + watch_label(done), now + 10
+                watch_stamp, queue, ready_seen = stamp, len(fresh), ready
             ticker = height >= 10
             bottom = height - (3 if ticker else 2)
             if ticker and now < flash_until:
@@ -1117,6 +1143,8 @@ class Deck:
                 "CHARACTER SHEETS", "Reserved.\n\nSlot allocated for a future module.")),
             ("exit", "Jack out", self.power),
         ]
+        if self.preferences["download"] and ytdlp_path():
+            spawn_worker()  # resume downloads interrupted by a shutdown
         if self.preferences["boot"]:
             self.boot()
         selected = 0
@@ -1425,46 +1453,109 @@ class Deck:
             selected = choice
             options[choice][1]()
 
+    def watch_badge(self, item):
+        g = self.g
+        if watch_file(item):
+            return g["ok"]
+        if item["state"] == "downloading":
+            return g["dl"] + (item["progress"] or "")
+        if item["state"] == "failed":
+            return g["bad"]
+        if item["state"] == "" and not item["done"] and self.preferences["download"]:
+            return g["wait"]
+        return " "
+
     def watch_list(self):
         selected = 0
         while True:
             items = load_watch()
             fresh = [item for item in items if not item["done"]]
-            labels = [f"Play all new ({len(fresh)})", "Clear watched"] + [
-                (self.g["off"] if item["done"] else self.g["on"]) + " " + watch_label(item) for item in items]
-            intro = None if items else [
-                "The list is empty. Send links from Ubuntu:",
-                "$ deck-add https://youtu.be/...",
-                "README / Watch list shows how to set up deck-add."]
-            choice = self.menu(f"WATCH LIST // {len(fresh)} new", labels, intro=intro, selected=selected)
+            files = [(item, watch_file(item)) for item in items]
+            stored = [(item, path) for item, path in files if path]
+            watched_files = [(item, path) for item, path in stored if item["done"]]
+
+            def total(pairs):
+                return sum(path.stat().st_size for _, path in pairs if path.exists())
+            try:
+                free = size_label(shutil.disk_usage(HOME).free)
+            except OSError:
+                free = "?"
+            busy = any(item["state"] == "downloading" for item in items)
+            intro = [f"{len(fresh)} new  {self.g['sep']}  {len(stored)} downloaded "
+                     f"({size_label(total(stored))})  {self.g['sep']}  {free} free on the SD card"]
+            if not self.preferences["download"]:
+                intro.append("Automatic downloads are off (Settings). Links stream when played.")
+            if not items:
+                intro += ["The list is empty. Send links from Ubuntu:", "$ deck-add https://youtu.be/..."]
+            labels = [f"Play all new ({len(fresh)})",
+                      f"Delete watched downloads ({len(watched_files)}, {size_label(total(watched_files))})",
+                      "Clear watched (removes their entries and downloads)"] + [
+                f"{self.g['off'] if item['done'] else self.g['on']} {self.watch_badge(item):<5}{watch_label(item)}"
+                for item in items]
+            choice = self.menu("WATCH LIST", labels, intro=intro, selected=selected, poll=busy)
+            if choice == -1:
+                selected = self.last_selected
+                continue
             if choice is None:
                 return
             selected = choice
             if choice == 0:
                 if fresh:
-                    self.play_links([item["url"] for item in fresh])
+                    self.play_items(fresh)
                 continue
             if choice == 1:
+                edit_watch(lambda items: [delete_download(i) for i in items if i["done"]])
+                continue
+            if choice == 2:
                 edit_watch(drop_watched)
                 selected = 0
                 continue
-            item = items[choice - 2]
-            action = self.menu("WATCH LIST // " + watch_label(item)[:50],
-                               ["Play", "Mark as " + ("new" if item["done"] else "watched"), "Remove", "Back"],
-                               intro=[item["url"], "Added " + (item["added"] or "?")])
-            if action == 0:
-                self.play_links([item["url"]])
-            elif action == 1:
-                edit_watch(lambda items: [i.update(done=not i["done"]) for i in items
-                                          if i["url"] == item["url"]])
-            elif action == 2:
-                edit_watch(lambda items: items.__setitem__(
-                    slice(None), [i for i in items if i["url"] != item["url"]]))
-                selected = max(0, selected - 1)
+            self.watch_item(items[choice - 3])
 
-    def play_links(self, urls):
-        if self.play(urls):
-            edit_watch(lambda items: [i.update(done=True) for i in items if i["url"] in urls])
+    def watch_item(self, item):
+        url = item["url"]
+        path = watch_file(item)
+        options = []
+        if path:
+            options.append(("Play (downloaded)", lambda: self.play_items([item])))
+        elif item["state"] == "downloading":
+            options.append((f"Play stream now (slow start, download at {item['progress'] or '0%'})",
+                            lambda: self.play_items([item])))
+        else:
+            options.append(("Play stream (slow start)", lambda: self.play_items([item])))
+        options.append(("Mark as " + ("new" if item["done"] else "watched"),
+                        lambda: set_watch(url, done=not item["done"])))
+        if path:
+            options.append((f"Delete download ({size_label(path.stat().st_size)}), keep the link",
+                            lambda: edit_watch(lambda items: [delete_download(i) for i in items
+                                                              if i["url"] == url])))
+        elif item["state"] in ("failed", "deleted") or (item["state"] == "ready" and not path):
+            def again():
+                set_watch(url, state="", progress="", error="", file="")
+                spawn_worker()
+            options.append(("Download again", again))
+
+        def remove(items):
+            for i in items:
+                if i["url"] == url:
+                    delete_download(i)
+            items[:] = [i for i in items if i["url"] != url]
+        options.append(("Remove from list" + (" and delete the download" if path else ""),
+                        lambda: edit_watch(remove)))
+        options.append(("Back", lambda: None))
+        status = {"downloading": "Downloading " + (item["progress"] or ""), "failed": "Download failed: " + item["error"],
+                  "deleted": "Download deleted.", "ready": "Downloaded: " + (item["file"] or "")}.get(
+            item["state"], "Waiting to download." if self.preferences["download"] and not item["done"] else "")
+        intro = [url, "Added " + (item["added"] or "?")] + ([status] if status else [])
+        choice = self.menu("WATCH LIST // " + watch_label(item)[:50], [label for label, _ in options], intro=intro)
+        if choice is not None:
+            options[choice][1]()
+
+    def play_items(self, items):
+        targets = [watch_file(item) or item["url"] for item in items]
+        if self.play(targets):
+            urls = {item["url"] for item in items}
+            edit_watch(lambda entries: [i.update(done=True) for i in entries if i["url"] in urls])
 
     def video_install(self):
         args = ["sudo", "apt-get", "install", "--no-install-recommends", "mpv", "quickjs"]
@@ -1727,6 +1818,7 @@ class Deck:
                 "Boot sequence / " + ("On" if p["boot"] else "Off"),
                 "Glyphs / " + p["glyphs"].capitalize(),
                 "Video output / " + p["video_out"].capitalize(),
+                "Watch list downloads / " + ("On" if p["download"] else "Off"),
                 "Connect to Wi-Fi",
             ], intro=[swatch], selected=selected)
             if choice is None:
@@ -1760,6 +1852,11 @@ class Deck:
                 settings["boot"] = not p["boot"]
             elif choice == 4:
                 settings["glyphs"] = GLYPH_MODES[(GLYPH_MODES.index(p["glyphs"]) + 1) % len(GLYPH_MODES)]
+            elif choice == 6:
+                settings["download"] = not p["download"]
+                if settings["download"]:
+                    save_settings(settings)
+                    spawn_worker()
             elif choice == 5:
                 settings["video_out"] = VIDEO_OUTPUTS[(VIDEO_OUTPUTS.index(p["video_out"]) + 1)
                                                       % len(VIDEO_OUTPUTS)]
@@ -1808,9 +1905,16 @@ def load_watch():
     for item in raw.get("items", []) if isinstance(raw, dict) else []:
         if isinstance(item, dict) and isinstance(item.get("url"), str) and public_url(
                 item["url"], ("https", "http"), allow_query=True):
+            name = item.get("file") if isinstance(item.get("file"), str) else ""
+            if name in (".", "..") or "/" in name or "\0" in name:
+                name = ""
             items.append({"url": item["url"], "title": clean(str(item.get("title") or ""))[:200],
                           "added": clean(str(item.get("added") or ""))[:40],
-                          "done": item.get("done") is True, "tried": item.get("tried") is True})
+                          "done": item.get("done") is True, "tried": item.get("tried") is True,
+                          "file": name[:255],
+                          "state": item.get("state") if item.get("state") in DL_STATES else "",
+                          "progress": clean(str(item.get("progress") or ""))[:8],
+                          "error": clean(str(item.get("error") or ""))[:200]})
     return items[:WATCH_MAX]
 
 
@@ -1908,9 +2012,118 @@ def update_ytdlp():
     return ytdlp_version(str(YTDLP_LOCAL)) or "installed"
 
 
+def watch_file(item):
+    """The downloaded file for an entry, if it is still on disk."""
+    if item["file"]:
+        path = DOWNLOADS / item["file"]
+        if path.parent == DOWNLOADS and path.is_file() and not path.is_symlink():
+            return path
+    return None
+
+
+def delete_download(item):
+    path = watch_file(item)
+    if path:
+        path.unlink(missing_ok=True)
+    item.update(file="", state="deleted" if item["state"] == "ready" or path else item["state"], progress="")
+    return path
+
+
 def drop_watched(items):
+    for item in items:
+        if item["done"]:
+            delete_download(item)
     items[:] = [item for item in items if not item["done"]]
     return len(items)
+
+
+def set_watch(url, **fields):
+    edit_watch(lambda items: [item.update(fields) for item in items if item["url"] == url])
+
+
+def spawn_worker():
+    """Start the background downloader (it exits at once if another one is running)."""
+    try:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "fetch"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
+def download_item(ytdlp, item):
+    DOWNLOADS.mkdir(parents=True, exist_ok=True)
+    merge = bool(shutil.which("ffmpeg"))
+    args = [ytdlp, *ytdlp_js_options(ytdlp), "--no-playlist", "--no-simulate", "--progress", "--newline",
+            "--no-mtime", "--no-colors", "-f", DL_FORMAT_MERGE if merge else DL_FORMAT_SINGLE,
+            "-o", str(DOWNLOADS / "%(title).80B [%(id)s].%(ext)s"),
+            "--print", "video:TITLE %(title)s", "--print", "after_move:FILE %(filepath)s",
+            "--progress-template",
+            "download:PROG %(progress.downloaded_bytes)s %(progress.total_bytes,progress.total_bytes_estimate)s"]
+    if merge:
+        args += ["--merge-output-format", "mp4"]
+    args += ["--", item["url"]]
+    url, last, last_pct, saved = item["url"], 0.0, -10, ""
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errors:
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=errors,
+                                text=True, errors="replace")
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if line.startswith("TITLE "):
+                set_watch(url, title=clean(line[6:])[:200])
+            elif line.startswith("PROG "):
+                parts = line.split()
+                if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit() and int(parts[2]):
+                    pct = min(100, int(parts[1]) * 100 // int(parts[2]))
+                    if abs(pct - last_pct) >= 5 or time.monotonic() - last > 5:
+                        last, last_pct = time.monotonic(), pct
+                        set_watch(url, progress=f"{pct}%")
+            elif line.startswith("FILE "):
+                path = Path(line[5:]).resolve()
+                if path.parent == DOWNLOADS.resolve() and path.is_file():
+                    saved = path.name
+        code = proc.wait()
+        errors.seek(0)
+        message = next((l.strip() for l in reversed(errors.read().splitlines()) if "ERROR" in l), "")
+    if code == 0 and saved:
+        set_watch(url, state="ready", file=saved, progress="", error="")
+    else:
+        set_watch(url, state="failed", progress="",
+                  error=clean(message.replace("ERROR:", "").strip())[:200] or f"yt-dlp exit status {code}")
+
+
+def run_downloads():
+    """Background worker: download new watch-list links one at a time, oldest first."""
+    if not load_settings()["download"]:
+        fetch_titles()
+        return
+    ytdlp = ytdlp_path()
+    if not ytdlp:
+        return
+    DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def pending():
+        return next((item for item in reversed(load_watch())
+                     if not item["done"] and item["state"] == ""), None)
+    while True:
+        with open(DATA / "downloader.lock", "w") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return  # another worker is running and will pick up new links
+            edit_watch(lambda items: [item.update(state="", progress="") for item in items
+                                      if item["state"] == "downloading"])  # left over from a power cut
+            while (item := pending()) is not None:
+                if shutil.disk_usage(HOME).free < DL_MIN_FREE:
+                    set_watch(item["url"], state="failed", error="Less than 500 MB free on the SD card.")
+                    continue
+                set_watch(item["url"], state="downloading", progress="0%", error="")
+                try:
+                    download_item(ytdlp, item)
+                except OSError as error:
+                    set_watch(item["url"], state="failed", error=clean(str(error))[:200])
+        if pending() is None:  # re-check after unlocking so a link added just now isn't missed
+            return
 
 
 def watch_label(item):
@@ -1980,20 +2193,28 @@ def command_line(args):
                   + ("" if ok else "  (not an http(s) link)"))
         print(f"{added} new, {len(good) - added} moved to the top. Watch list: {len(load_watch())} links.")
         if good and ytdlp_path():
-            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "titles"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+            spawn_worker()
+            if load_settings()["download"]:
+                print("Downloading in the background on the deck.")
         return 0 if len(good) == len(links) and links else 1
     if name == "list":
         items = load_watch()
         for number, item in enumerate(items, 1):
-            print(f"{number:3d} {'   ' if item['done'] else 'new'}  {watch_label(item)[:90]}")
+            state = ("ready" if watch_file(item) else
+                     {"downloading": "down " + item["progress"], "failed": "failed", "deleted": "deleted"}.get(
+                         item["state"], "queued" if not item["done"] and load_settings()["download"] else ""))
+            print(f"{number:3d} {'   ' if item['done'] else 'new'}  {state:<9} {watch_label(item)[:80]}")
         if not items:
             print("Watch list is empty. Add links with: nightdeck add URL")
         return 0
     if name == "remove" and len(rest) == 1 and rest[0].isdigit():
         index = int(rest[0]) - 1
-        removed = edit_watch(lambda items: items.pop(index) if 0 <= index < len(items) else None)
+        def change(items):
+            if 0 <= index < len(items):
+                delete_download(items[index])
+                return items.pop(index)
+            return None
+        removed = edit_watch(change)
         print(f"Removed: {watch_label(removed)}" if removed else "No entry with that number.")
         return 0 if removed else 1
     if name == "clear":
@@ -2008,6 +2229,9 @@ def command_line(args):
             return 1
         if not (shutil.which("deno") or shutil.which("qjs")):
             print("[ !! ] YouTube also needs QuickJS: sudo apt install quickjs")
+        return 0
+    if name == "fetch":
+        run_downloads()
         return 0
     if name == "titles":
         fetch_titles()
