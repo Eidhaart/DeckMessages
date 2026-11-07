@@ -128,9 +128,10 @@ highlighting, autosuggestions and fzf.
   long slow commands took, and the time.
 - **Plugins:** autosuggestions, syntax highlighting, history substring search (type, then ↑), git, sudo (Esc Esc),
   extract, colored man pages, fzf and zoxide when installed.
-- **`jackin`:** tunes into the deck from any terminal with a full-screen jack-in sequence in your skin's colors
-  (handshake, ICE bypass, synapse sync, glitching countdown), then opens the deck right there.
-  `jackin --session` logs into the NETDECK session instead, and `jackin --quick` skips the show. Any key skips it.
+- **`jackin`:** takes you from Ubuntu into the NETDECK session. It asks once (apps open in Ubuntu will close), plays
+  a full-screen jack-in sequence in your skin's colors (handshake, ICE bypass, synapse sync, glitching countdown),
+  then switches sessions. `jackin --here` opens the deck inside the current terminal instead, `--quick` skips the
+  show, and any key skips it mid-way.
 - **Shortcuts:** `deck`, `skin`, and `ls`/`ll`/`tree` through eza when it's installed.
 - Your old `~/.zshrc` is saved as `~/.zshrc.pre-netdeck` (`--undo` restores it). Put your own lines in
   `~/.zshrc.local`, which future updates never overwrite.

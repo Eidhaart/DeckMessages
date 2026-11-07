@@ -1,8 +1,8 @@
 # jackin - tune into NETDECK//OS from any zsh terminal.
 #
-#   jackin             play the jack-in sequence, then open the deck in this terminal
-#   jackin --session   ...then log straight into the NETDECK session instead (netdeck-switch)
-#   jackin --quick     skip the sequence
+#   jackin             jack into the NETDECK session: confirm, play the sequence, switch sessions
+#   jackin --here      play the sequence, then open the deck inside this terminal instead
+#   jackin --quick     skip the sequence (combine with --here)
 #   nightdeck [cmd]    jack into the nightdeck Raspberry Pi (ssh deck@nightdeck.local) with its own sequence
 #
 # Any key skips the sequence; Ctrl+C aborts and leaves you in the shell.
@@ -135,25 +135,39 @@ _jackin_sequence() {
 jackin() {
   emulate -L zsh
   setopt local_traps
-  local mode=here quick=0 a
+  local mode=session quick=0 a
   for a in "$@"; do
     case $a in
+      --here|-H|--terminal) mode=here ;;
       -s|--session) mode=session ;;
       -q|--quick) quick=1 ;;
-      -h|--help) print "jackin [--session] [--quick]  -  tune into NETDECK//OS (any key skips the sequence)"; return ;;
+      -h|--help) print "jackin [--here] [--quick]  -  switch to the NETDECK session (--here: open the deck in this terminal)"; return ;;
     esac
   done
+  if [[ -n $NETDECK_KIOSK ]]; then
+    print -P "%F{${ND[acc]:-cyan}}◢ already jacked in%f %F{${ND[dim]:-grey}}- this is the NETDECK session (F10 → U goes back to Ubuntu)%f"
+    return 0
+  fi
   local deck=${commands[netdeck]:-$HOME/.local/bin/netdeck}
   if [[ ! -x $deck ]]; then
     print -P "%F{${ND[bad]:-red}}✗ netdeck isn't installed%f - run ./install.sh in the netdeck folder"
     return 1
   fi
-  if (( ! quick )); then
-    _jackin_sequence || return $?
-  fi
   if [[ $mode == session ]]; then
-    netdeck-switch deck
+    local sw=${commands[netdeck-switch]:-$HOME/.local/bin/netdeck-switch}
+    if [[ ! -x $sw || ! -e /usr/local/sbin/netdeck-switch-root ]]; then
+      print -P "%F{${ND[bad]:-red}}✗ session switching isn't installed%f - run ./install.sh --session in the netdeck folder"
+      print -P "%F{${ND[dim]:-grey}}  (jackin --here opens the deck in this terminal meanwhile)%f"
+      return 1
+    fi
+    local ans
+    print -nP "%F{${ND[warn]:-yellow}}◢ jack into the NETDECK session?%f %F{${ND[dim]:-grey}}apps open in Ubuntu will close%f %F{${ND[hi]:-yellow}}[Y/n]%f "
+    read -k 1 ans; print
+    [[ $ans == [nN] ]] && return 0
+    (( quick )) || _jackin_sequence || return $?
+    "$sw" deck
   else
+    (( quick )) || _jackin_sequence || return $?
     "$deck" --no-boot
   fi
 }
