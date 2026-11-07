@@ -27,6 +27,9 @@ if [ "$packages" -eq 1 ]; then
     # Bluetooth headphones and speakers: PipeWire + WirePlumber with the BlueZ plugin.
     sudo apt-get install --no-install-recommends bluez pipewire wireplumber libspa-0.2-bluetooth rfkill \
         || printf '%s\n' 'Skipping Bluetooth audio packages.'
+    # Spotify Connect (spotifyd, installed from the Music menu) plays through PipeWire's PulseAudio service.
+    sudo apt-get install --no-install-recommends pipewire-pulse libpulse0 playerctl dbus-user-session \
+        || printf '%s\n' 'Skipping Spotify support packages.'
 fi
 install -d "$HOME/.local/bin"
 temp=$(mktemp "$HOME/.local/bin/.nightdeck.XXXXXX")

@@ -4,6 +4,7 @@ import curses
 import datetime
 import fcntl
 import hashlib
+import io
 import json
 import locale
 import os
@@ -15,6 +16,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import textwrap
 import threading
@@ -417,6 +419,8 @@ class Deck:
         self.started = self.launched = time.monotonic()
         self.wire = ""
         self.audio = {}
+        self.np, self.np_time = None, 0.0
+        threading.Thread(target=self.music_monitor, daemon=True).start()
         if shutil.which("wpctl") or shutil.which("bluetoothctl"):
             threading.Thread(target=self.audio_monitor, daemon=True).start()
         self.apply_theme()
@@ -584,6 +588,8 @@ class Deck:
             self.put(2, info, DIM, column=width - len(info) - 2)
         self.put(3, self.g["h"] * min(width - 2, len(heading) + 2), HEAD, column=1)
         self.rule(height - 2)
+        if self.np:
+            self.draw_np(height - 2, width, compact=True)
         self.keycaps(height - 1, hints)
         if title != self.shown_title:
             self.shown_title = title
@@ -1068,6 +1074,8 @@ class Deck:
                 shown = flash if not fx or int(now * 3) % 2 or now < flash_until - 8 else ""
                 self.put(height - 2, " " + shown + flash_tail, SEL, True,
                          column=column, limit=width - column - 2)
+            elif ticker and self.np:
+                self.draw_np(height - 2, width)
             elif ticker:
                 text = self.wire or f"WIRE OFFLINE {self.g['sep']} open News to sync headlines   "
                 column = self.put(height - 2, " WIRE ", BADGE, True, column=1)
@@ -1132,6 +1140,9 @@ class Deck:
                 selected = (selected - 1) % len(actions)
             if key in (curses.KEY_DOWN, ord("j")):
                 selected = (selected + 1) % len(actions)
+            if key in (ord(" "), ord("["), ord("]")) and self.np:
+                np_control(self.np, {ord(" "): "toggle", ord("["): "prev", ord("]"): "next"}[key])
+                self.np_time = 0.0  # refresh the strip right away
             if key in (ord("+"), ord("="), ord("-"), ord("m")) and shutil.which("wpctl"):
                 if key == ord("m"):
                     wpctl("set-mute", "@DEFAULT_AUDIO_SINK@", "toggle")
@@ -1170,10 +1181,11 @@ class Deck:
             ("zsh", "Zsh shell", self.zsh),
             ("claude", "Claude Code", self.claude),
             ("video", "Video player", self.video),
-            ("ssh", "SSH utilities", self.ssh),
+            ("music", "Music & radio", self.music),
             ("news", "News wire", self.news),
             ("settings", "Settings", self.settings),
             ("bluetooth", "Bluetooth & sound", self.bluetooth),
+            ("ssh", "SSH utilities", self.ssh),
             ("vitals", "System vitals", self.system),
             ("sheets", "Character sheets", lambda: self.view(
                 "CHARACTER SHEETS", "Reserved.\n\nSlot allocated for a future module.")),
@@ -1565,6 +1577,8 @@ class Deck:
                             lambda: self.play_items([item])))
         else:
             options.append(("Play stream (slow start)", lambda: self.play_items([item])))
+        options.append(("Listen in the background (audio only)",
+                        lambda: self.music_start([watch_file(item) or item["url"]], "LINK", watch_label(item))))
         options.append(("Mark as " + ("new" if item["done"] else "watched"),
                         lambda: set_watch(url, done=not item["done"])))
         if path:
@@ -1620,8 +1634,9 @@ class Deck:
         save_settings(settings)
         self.preferences = settings
 
-    def video_pick(self, root):
-        VIDEOS.mkdir(exist_ok=True)
+    def video_pick(self, root, on_play=None, kinds=MEDIA_EXT, label="VIDEO"):
+        on_play = on_play or self.play
+        root.mkdir(exist_ok=True)
         current = root
         selected = 0
         while True:
@@ -1633,7 +1648,7 @@ class Deck:
             dirs = sorted((p for p in entries if p.is_dir() and not p.is_symlink()
                            and not p.name.startswith(".")), key=lambda p: p.name.lower())
             files = sorted((p for p in entries if p.is_file() and not p.is_symlink()
-                            and p.suffix.lower() in MEDIA_EXT), key=lambda p: p.name.lower())
+                            and p.suffix.lower() in kinds), key=lambda p: p.name.lower())
             labels = ["Parent directory"]
             if files:
                 labels.append(f"Play all here ({len(files)})")
@@ -1644,10 +1659,11 @@ class Deck:
                 except OSError:
                     labels.append(p.name)
             where = "~/" + str(current.relative_to(HOME)) if current.is_relative_to(HOME) else str(current)
+            example = "movie.mp4" if label == "VIDEO" else "album/*.mp3"
             intro = None if files or dirs else [
-                "No videos here yet. Copy some from Ubuntu with:",
-                f"$ scp movie.mp4 {self.user}@{self.host}.local:~/Videos/"]
-            choice = self.menu("VIDEO // " + where, labels, intro=intro, selected=selected)
+                "Nothing here yet. Copy files from Ubuntu with:",
+                f"$ scp {example} {self.user}@{self.host}.local:{where}/"]
+            choice = self.menu(label + " // " + where, labels, intro=intro, selected=selected)
             if choice is None:
                 return
             selected = choice
@@ -1658,11 +1674,11 @@ class Deck:
                 continue
             index = choice - (2 if files else 1)
             if index == -1:
-                self.play(files)
+                on_play(files)
             elif index < len(dirs):
                 current, selected = dirs[index], 0
             else:
-                self.play([files[index - len(dirs)]])
+                on_play(files[index - len(dirs):] if label == "MUSIC" else [files[index - len(dirs)]])
 
     def video_path(self):
         value = self.ask("VIDEO // file path, e.g. ~/Videos/clip.mp4", prefix="")
@@ -1725,6 +1741,258 @@ class Deck:
             self.notice("VIDEO", "The stream did not play. Video sites change often: choose "
                         "Update yt-dlp in Video player, then try again. " + ytdlp_status(), ok=False)
         return code == 0
+
+    def music_monitor(self):
+        """Background thread: what's playing (background player or Spotify), once a second."""
+        last_spotify = False
+        while True:
+            try:
+                local = music_status()
+                spotify = spotify_status() if SPOTIFYD.exists() or shutil.which("spotifyd") else None
+                spotify_playing = bool(spotify and not spotify["paused"])
+                if spotify_playing and not last_spotify and local and not local["paused"]:
+                    mpv_ipc(["set_property", "pause", True])  # Spotify took over: pause the deck player
+                    local["paused"] = True
+                last_spotify = spotify_playing
+                if spotify_playing or (spotify and not local):
+                    self.np = spotify
+                else:
+                    self.np = local or spotify
+                self.np_time = time.monotonic()
+            except Exception:  # the monitor must never take the deck down
+                self.np = None
+            for _ in range(10):
+                time.sleep(0.1)
+                if self.np_time == 0.0:  # a key asked for a refresh
+                    break
+
+    def draw_np(self, row, width, compact=False):
+        """The now-playing strip: badge, equalizer, title — artist, progress."""
+        np = self.np
+        if not np:
+            return
+        g = self.g
+        pos = np["pos"] + (0 if np["paused"] else max(0.0, time.monotonic() - self.np_time))
+        if np["dur"]:
+            pos = min(pos, np["dur"])
+        if np["paused"]:
+            eq = "||"
+        elif self.preferences["fx"]:
+            phase = int(time.monotonic() * 6)
+            eq = "".join(g["spark"][(phase * (i + 3) + i * 5) % len(g["spark"])] for i in range(4))
+        else:
+            eq = g["note"]
+        text = np["title"] + (f" {g['sep']} {np['artist']}" if np["artist"] else "")
+        if np["live"]:
+            tail = f"{g['on']} LIVE"
+        else:
+            tail = clock(pos) + (" / " + clock(np["dur"]) if np["dur"] else "")
+        if compact:
+            strip = f" {g['note']} {eq} {text}  {tail} "
+            room = min(len(strip), max(0, width // 2))
+            if room < 16:
+                return
+            if len(strip) > room:
+                strip = f" {g['note']} {eq} " + text[:max(4, room - len(tail) - 10)] + f"{g['sep']}  {tail} "
+            column = max(1, width - len(strip) - 3)
+            self.put(row, g["lj"], DIM, column=column - 1)
+            self.put(row, strip, HINT, column=column, limit=width - column - 2)
+            self.put(row, g["rj"], DIM, column=min(width - 2, column + len(strip)))
+            return
+        column = self.put(row, f" {g['note']} ", KEYCAP, True, column=1)
+        column = self.put(row, f" {np['src']} ", DIM, column=column)
+        column = self.put(row, eq + " ", VIT, True, column=column)
+        bar = ""
+        if not np["live"] and np["dur"]:
+            span = 10 if width >= 70 else 6
+            filled = round(span * pos / np["dur"]) if np["dur"] else 0
+            bar = g["full"] * filled + g["empty"] * (span - filled)
+        right = len(tail) + (len(bar) + 1 if bar else 0) + 2
+        self.put(row, text, TEXT, True, column=column, limit=max(0, width - column - right - 2))
+        column = width - right - 1
+        if bar:
+            filled = bar.count(g["full"])
+            column = self.put(row, bar[:filled], HINT, column=column)
+            column = self.put(row, bar[filled:], DIM, column=column) + 1
+        self.put(row, tail, HEAD if np["live"] else HINT, np["live"], column=column)
+
+    def music_start(self, targets, source, name=""):
+        if not targets:
+            return
+        try:
+            self.busy("MUSIC", "Starting the player", lambda: music_play(targets, source, name))
+            self.np_time = 0.0
+        except (OSError, ValueError) as error:
+            self.notice("MUSIC", f"Could not play: {error}", ok=False)
+
+    def music(self):
+        """Background music: radio, files, links and Spotify Connect, with a now-playing strip everywhere."""
+        selected = 0
+        while True:
+            np = self.np
+            intro = []
+            options = []
+            if np:
+                pos = np["pos"] + (0 if np["paused"] else max(0.0, time.monotonic() - self.np_time))
+                state = "Paused" if np["paused"] else "Playing"
+                intro.append([(f"{state} {self.g['sep']} {np['src']}  ", DIM), (np["title"], TEXT)])
+                if np["artist"]:
+                    intro.append([(np["artist"], HINT)])
+                if np["live"]:
+                    intro.append([(f"{self.g['on']} LIVE", HEAD)])
+                elif np["dur"]:
+                    span = 30
+                    filled = round(span * min(pos, np["dur"]) / np["dur"])
+                    intro.append([(self.g["full"] * filled, HINT), (self.g["empty"] * (span - filled), DIM),
+                                  (f" {clock(pos)} / {clock(np['dur'])}", TEXT)])
+                if np["count"] > 1:
+                    intro.append([(f"Track {np['index'] + 1} of {np['count']}", DIM)])
+                if np["src"] == "SPOTIFY":
+                    intro.append([("Spotify Connect: you can also control it from the Spotify app.", DIM)])
+                options += [("Resume" if np["paused"] else "Pause", lambda: np_control(np, "toggle")),
+                            ("Next", lambda: np_control(np, "next")), ("Previous", lambda: np_control(np, "prev"))]
+                if not np["live"]:
+                    options += [("Forward 30 s", lambda: np_control(np, "forward")),
+                                ("Back 10 s", lambda: np_control(np, "back"))]
+                options.append(("Stop", lambda: np_control(np, "stop")))
+            else:
+                intro.append([("Nothing playing. Music keeps going while you use the rest of the deck.", DIM)])
+            intro.append([("Dashboard keys: space pause, [ ] previous/next, + - volume.", DIM)])
+            options += [("Radio", self.radio),
+                        ("Music files (~/Music)", lambda: self.video_pick(
+                            MUSIC, on_play=lambda files: self.music_start(files, "MUSIC"), kinds=AUDIO_EXT,
+                            label="MUSIC")),
+                        ("Shuffle all music", self.music_shuffle),
+                        ("Listen to a link (YouTube, SoundCloud...)", self.music_link),
+                        ("Spotify", self.spotify)]
+            labels = [label.split(" ")[0] for label, _ in options]
+            if labels != getattr(self, "music_labels", labels):
+                selected = 0  # controls appeared or vanished: start from the top
+            self.music_labels = labels
+            choice = self.menu("MUSIC & RADIO", [label for label, _ in options], intro=intro,
+                               selected=selected, poll=True)
+            if choice == -1:
+                selected = self.last_selected
+                continue
+            if choice is None:
+                return
+            selected = choice
+            options[choice][1]()
+            self.np_time = 0.0
+            time.sleep(0.15)
+
+    def music_shuffle(self):
+        files = [Path(folder, name) for folder, _, names in os.walk(MUSIC) for name in names
+                 if Path(name).suffix.lower() in AUDIO_EXT][:5000]
+        if not files:
+            self.notice("MUSIC", "No music in ~/Music yet. Copy some from Ubuntu: scp -r album "
+                        f"{self.user}@{self.host}.local:~/Music/", ok=False)
+            return
+        random.shuffle(files)
+        self.music_start(files, "MUSIC", "Shuffle")
+
+    def music_link(self):
+        value = self.ask("MUSIC // link to play as audio", prefix="")
+        if not value:
+            return
+        value = re.sub(r"\\([?=&#%+!*;~])", r"\1", value.strip())
+        if not public_url(value, ("https", "http"), allow_query=True):
+            self.notice("MUSIC", "Use a plain http(s) link.", ok=False)
+            return
+        self.music_start([value], "LINK", value)
+
+    def radio(self):
+        selected = 0
+        while True:
+            custom = load_stations()
+            stations = list(STATIONS) + custom
+            labels = [name for name, _ in stations] + ["All Sveriges Radio channels", "Add a station (stream URL)"]
+            if custom:
+                labels.append("Remove a station")
+            choice = self.menu("MUSIC // radio", labels, selected=selected,
+                               intro=["Live streams. They keep playing in the background."])
+            if choice is None:
+                return
+            selected = choice
+            if choice < len(stations):
+                name, url = stations[choice]
+                self.music_start([url], "RADIO", name)
+                return
+            action = labels[choice]
+            if action.startswith("All Sveriges"):
+                channels = self.busy("MUSIC // radio", "Fetching Sveriges Radio channels", sr_channels)
+                if not channels:
+                    self.notice("MUSIC", "Could not reach Sveriges Radio. Check the network.", ok=False)
+                    continue
+                pick = self.menu("MUSIC // Sveriges Radio", [name for name, _ in channels])
+                if pick is not None:
+                    self.music_start([channels[pick][1]], "RADIO", channels[pick][0])
+                    return
+            elif action.startswith("Add"):
+                url = self.ask("RADIO // stream URL (http or https)", prefix="")
+                if not url or not public_url(url.strip(), ("https", "http"), allow_query=True):
+                    continue
+                name = self.ask("RADIO // name for this station", prefix="") or url.strip()
+                save_stations(custom + [(clean(name.strip())[:60], url.strip())])
+                selected = len(STATIONS) + len(custom)  # land on the new station: Enter plays it
+            else:
+                pick = self.menu("MUSIC // remove station", [name for name, _ in custom])
+                if pick is not None:
+                    save_stations(custom[:pick] + custom[pick + 1:])
+
+    def spotify(self):
+        selected = 0
+        while True:
+            installed = SPOTIFYD.exists()
+            missing = [tool for tool in ("playerctl", "pipewire-pulse") if not shutil.which(tool)]
+            active = installed and user_systemctl("is-active", "nightdeck-spotifyd").stdout.strip() == "active"
+            intro = ["Spotify Connect turns the deck into a speaker named \"Nightdeck\". Open Spotify on your "
+                     "phone or computer on the same Wi-Fi, tap the devices icon and pick Nightdeck. "
+                     "Needs Spotify Premium.",
+                     "spotifyd: " + ("running" if active else "installed, not running" if installed else "not installed")]
+            options = []
+            if missing:
+                intro.append("Needs: " + ", ".join(missing) + " (PipeWire's PulseAudio service and playerctl).")
+                options.append(("Install Spotify support packages", self.spotify_packages))
+            if not installed:
+                options.append(("Install Spotify Connect (spotifyd)", self.spotify_install))
+            else:
+                options += [("Turn Spotify Connect " + ("off" if active else "on"), lambda: self.spotify_power(not active)),
+                            ("Restart Spotify Connect", lambda: self.spotify_power(True, restart=True)),
+                            ("Update spotifyd", self.spotify_install)]
+            choice = self.menu("MUSIC // Spotify", [label for label, _ in options], intro=intro, selected=selected)
+            if choice is None:
+                return
+            selected = choice
+            options[choice][1]()
+
+    def spotify_packages(self):
+        args = ["sudo", "apt-get", "install", "--no-install-recommends", *SPOTIFY_PACKAGES]
+        if self.confirm("SPOTIFY // packages", args):
+            self.run(args)
+
+    def spotify_install(self):
+        try:
+            asset = self.busy("SPOTIFY", "Downloading spotifyd and checking its SHA-512", install_spotifyd)
+        except (OSError, ValueError, tarfile.TarError) as error:
+            self.notice("SPOTIFY", f"Install failed: {error}", ok=False)
+            return
+        self.spotify_power(True, restart=True)
+        self.notice("SPOTIFY", f"Installed {asset}. Pick \"Nightdeck\" in the Spotify app's device list. "
+                    "It starts automatically with the deck.")
+
+    def spotify_power(self, on, restart=False):
+        write_spotify_service()
+        user_systemctl("daemon-reload")
+        if on:
+            result = user_systemctl("enable", "--now", "nightdeck-spotifyd")
+            if restart and result.returncode == 0:
+                result = user_systemctl("restart", "nightdeck-spotifyd")
+        else:
+            result = user_systemctl("disable", "--now", "nightdeck-spotifyd")
+        if result.returncode:
+            self.notice("SPOTIFY", "systemd said: " + clean(result.stderr.strip() or result.stdout.strip())[:200],
+                        ok=False)
 
     def audio_monitor(self):
         """Background thread: refresh the connected Bluetooth device and sound output every few seconds."""
@@ -2321,17 +2589,34 @@ def ytdlp_status():
     return f"YouTube: yt-dlp {version} + " + ("Deno" if shutil.which("deno") else "QuickJS") + " ready."
 
 
+def fetch_url(url, limit):
+    """Download over HTTPS with a size cap."""
+    request = urllib.request.Request(url, headers={"User-Agent": "Nightdeck/" + VERSION})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        if urlsplit(response.geturl()).scheme != "https":
+            raise ValueError("Download redirected away from HTTPS.")
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(url.rsplit("/", 1)[-1] + " is larger than expected.")
+    return data
+
+
+def install_binary(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as file:
+        temp = Path(file.name)
+        file.write(data)
+    try:
+        temp.chmod(0o755)
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def update_ytdlp():
     """Download the latest official yt-dlp release, check its SHA-256, install it to ~/.local/bin."""
     def fetch(name, limit):
-        request = urllib.request.Request(YTDLP_RELEASE + name, headers={"User-Agent": "Nightdeck/" + VERSION})
-        with urllib.request.urlopen(request, timeout=60) as response:
-            if urlsplit(response.geturl()).scheme != "https":
-                raise ValueError("Download redirected away from HTTPS.")
-            data = response.read(limit + 1)
-        if len(data) > limit:
-            raise ValueError(name + " is larger than expected.")
-        return data
+        return fetch_url(YTDLP_RELEASE + name, limit)
     sums = fetch("SHA2-256SUMS", 64 * 1024).decode("utf-8", "replace")
     expected = next((line.split()[0].lower() for line in sums.splitlines()
                      if len(line.split()) == 2 and line.split()[1].lstrip("*") == "yt-dlp"), None)
@@ -2340,16 +2625,268 @@ def update_ytdlp():
     binary = fetch("yt-dlp", 64 * 1024 * 1024)
     if hashlib.sha256(binary).hexdigest() != expected:
         raise ValueError("Checksum mismatch: download rejected.")
-    YTDLP_LOCAL.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=YTDLP_LOCAL.parent, delete=False) as file:
-        temp = Path(file.name)
-        file.write(binary)
-    try:
-        temp.chmod(0o755)
-        temp.replace(YTDLP_LOCAL)
-    finally:
-        temp.unlink(missing_ok=True)
+    install_binary(YTDLP_LOCAL, binary)
     return ytdlp_version(str(YTDLP_LOCAL)) or "installed"
+
+
+# ---------- music: background mpv + Spotify Connect ----------
+
+MUSIC = HOME / "Music"
+AUDIO_EXT = {".mp3", ".flac", ".ogg", ".oga", ".opus", ".wav", ".m4a", ".aac", ".wma", ".aiff", ".alac"}
+MUSIC_STATE = DATA / "music.json"
+STATIONS_FILE = DATA / "stations.json"
+STATIONS = (  # official stream addresses (Sveriges Radio API, SomaFM)
+    ("SR P1", "https://www.sverigesradio.se/topsy/direkt/srapi/132.mp3"),
+    ("SR P2", "https://www.sverigesradio.se/topsy/direkt/srapi/163.mp3"),
+    ("SR P3", "https://www.sverigesradio.se/topsy/direkt/srapi/164.mp3"),
+    ("SomaFM DEF CON Radio", "https://ice2.somafm.com/defcon-128-mp3"),
+    ("SomaFM Vaporwaves", "https://ice2.somafm.com/vaporwaves-128-mp3"),
+    ("SomaFM Groove Salad", "https://ice2.somafm.com/groovesalad-128-mp3"),
+    ("SomaFM Drone Zone", "https://ice2.somafm.com/dronezone-128-mp3"),
+)
+SR_CHANNELS = "https://api.sr.se/api/v2/channels?format=json&pagination=false"
+SPOTIFYD = HOME / ".local/bin/spotifyd"
+SPOTIFYD_RELEASE = "https://github.com/Spotifyd/spotifyd/releases/latest/download/"
+SPOTIFY_CONF = CONFIG / "spotifyd.conf"
+SPOTIFY_UNIT = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "systemd/user/nightdeck-spotifyd.service"
+SPOTIFY_PACKAGES = ["pipewire-pulse", "libpulse0", "playerctl", "dbus-user-session"]
+
+
+def music_socket():
+    path = Path(os.environ.get("XDG_RUNTIME_DIR") or CACHE) / "nightdeck-music.sock"
+    if len(str(path)) <= 100:
+        return path
+    # Unix socket paths max out near 108 bytes: fall back to a private folder in /tmp.
+    private = Path(tempfile.gettempdir()) / f"nightdeck-{os.getuid()}"
+    try:
+        private.mkdir(mode=0o700, exist_ok=True)
+        info = private.lstat()
+        if private.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise OSError("unsafe socket folder")
+    except OSError:
+        return path
+    return private / "music.sock"
+
+
+def mpv_ipc(*commands, timeout=0.5):
+    """Send commands to the background player; returns their results, or None if it isn't running."""
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(str(music_socket()))
+    except OSError:
+        return None
+    results, buffer = {}, b""
+    with sock:
+        try:
+            sock.sendall("".join(json.dumps({"command": list(c), "request_id": i}) + "\n"
+                                 for i, c in enumerate(commands, 1)).encode())
+            end = time.monotonic() + timeout
+            while len(results) < len(commands) and time.monotonic() < end:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    try:
+                        message = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(message, dict) and "request_id" in message:
+                        results[message["request_id"]] = (message.get("data")
+                                                          if message.get("error") == "success" else None)
+        except OSError:
+            pass
+    return [results.get(i) for i in range(1, len(commands) + 1)]
+
+
+def music_play(targets, source, name=""):
+    """Play files/URLs in the background player (started on demand); pauses Spotify."""
+    mpv = shutil.which("mpv")
+    if not mpv:
+        raise ValueError("mpv is not installed.")
+    if mpv_ipc(["get_property", "pid"]) is None:
+        path = music_socket()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
+        args = [mpv, "--idle=yes", "--no-video", "--no-terminal", "--audio-display=no",
+                "--input-ipc-server=" + str(path), "--ytdl-format=bestaudio/best", "--cache=yes",
+                "--demuxer-max-bytes=16MiB"]
+        ytdlp = ytdlp_path()
+        if ytdlp:
+            args.append("--script-opts-append=ytdl_hook-ytdl_path=" + ytdlp)
+            if ytdlp_js_options(ytdlp):
+                args.append("--ytdl-raw-options-append=js-runtimes=quickjs")
+        subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        end = time.monotonic() + 5
+        while mpv_ipc(["get_property", "pid"]) is None:
+            if time.monotonic() > end:
+                raise ValueError("The background player did not start.")
+            time.sleep(0.1)
+    if shutil.which("playerctl"):
+        subprocess.run(["playerctl", "-p", "spotifyd", "pause"], capture_output=True, timeout=3, check=False)
+    commands = [["loadfile", str(targets[0]), "replace"]]
+    commands += [["loadfile", str(target), "append"] for target in targets[1:]]
+    mpv_ipc(*commands, ["set_property", "pause", False], timeout=3)
+    DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
+    MUSIC_STATE.write_text(json.dumps({"source": source, "name": clean(name)[:80]}), encoding="utf-8")
+
+
+def music_status():
+    """Now-playing info from the background player, or None."""
+    names = ("idle-active", "pause", "media-title", "metadata", "time-pos", "duration",
+             "playlist-pos", "playlist-count")
+    values = mpv_ipc(*[["get_property", name] for name in names])
+    if values is None or values[0] is not False:
+        return None
+    _, paused, media_title, metadata, position, duration, index, count = values
+    meta = {str(k).lower(): clean(str(v)) for k, v in (metadata or {}).items()} if isinstance(metadata, dict) else {}
+    try:
+        state = json.loads(MUSIC_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    source = state.get("source") if state.get("source") in ("RADIO", "MUSIC", "LINK") else "MUSIC"
+    title, artist = meta.get("title", ""), meta.get("artist", "")
+    if not title and meta.get("icy-title"):
+        artist, _, title = meta["icy-title"].rpartition(" - ")
+    station = clean(str(state.get("name") or meta.get("icy-name") or ""))
+    title = title or (station if source == "RADIO" else "") or clean(str(media_title or ""))
+    if source == "RADIO" and station and not artist:
+        artist = station
+    live = source == "RADIO" or not isinstance(duration, (int, float))
+    return {"src": source, "title": title[:120], "artist": artist[:80], "paused": bool(paused),
+            "pos": float(position) if isinstance(position, (int, float)) else 0.0,
+            "dur": float(duration) if isinstance(duration, (int, float)) else 0.0, "live": live,
+            "index": index if isinstance(index, int) else 0, "count": count if isinstance(count, int) else 0}
+
+
+def spotify_status():
+    if not shutil.which("playerctl"):
+        return None
+    try:
+        result = subprocess.run(["playerctl", "-p", "spotifyd", "metadata", "--format",
+                                 "{{status}}\t{{artist}}\t{{title}}\t{{mpris:length}}\t{{position}}"],
+                                capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    parts = result.stdout.rstrip("\n").split("\t")
+    if result.returncode or len(parts) != 5 or parts[0] not in ("Playing", "Paused"):
+        return None
+    status, artist, title, length, position = parts
+    return {"src": "SPOTIFY", "title": clean(title)[:120], "artist": clean(artist)[:80],
+            "paused": status == "Paused", "live": False, "index": 0, "count": 0,
+            "pos": int(position) / 1e6 if position.isdigit() else 0.0,
+            "dur": int(length) / 1e6 if length.isdigit() else 0.0}
+
+
+def np_control(np, action):
+    """toggle, next, prev, stop, forward, back for whatever is playing."""
+    if np and np["src"] == "SPOTIFY":
+        args = {"toggle": ["play-pause"], "next": ["next"], "prev": ["previous"], "stop": ["pause"],
+                "forward": ["position", "30+"], "back": ["position", "10-"]}[action]
+        subprocess.run(["playerctl", "-p", "spotifyd", *args], capture_output=True, timeout=3, check=False)
+        return
+    command = {"toggle": ["cycle", "pause"], "next": ["playlist-next", "weak"], "prev": ["playlist-prev", "weak"],
+               "stop": ["quit"], "forward": ["seek", 30, "relative"], "back": ["seek", -10, "relative"]}[action]
+    mpv_ipc(command)
+
+
+def clock(seconds):
+    seconds = max(0, int(seconds))
+    return f"{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}" if seconds >= 3600 \
+        else f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def load_stations():
+    try:
+        raw = json.loads(STATIONS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [(clean(str(s.get("name")))[:60], s["url"]) for s in raw if isinstance(s, dict)
+            and isinstance(s.get("url"), str) and public_url(s["url"], ("https", "http"), allow_query=True)][:100]
+
+
+def save_stations(stations):
+    DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
+    STATIONS_FILE.write_text(json.dumps([{"name": n, "url": u} for n, u in stations], ensure_ascii=False),
+                             encoding="utf-8")
+
+
+def sr_channels():
+    """All Sveriges Radio channels with live streams (cached for offline menus)."""
+    cache = CACHE / "sr-channels.json"
+    try:
+        data = json.loads(fetch_url(SR_CHANNELS, 2 * 1024 * 1024))
+        channels = [(clean(str(c.get("name")))[:60], c["liveaudio"]["url"]) for c in data.get("channels", [])
+                    if isinstance(c, dict) and isinstance(c.get("liveaudio"), dict)
+                    and public_url(str(c["liveaudio"].get("url", "")), ("https", "http"), allow_query=True)]
+        CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
+        cache.write_text(json.dumps(channels, ensure_ascii=False), encoding="utf-8")
+        return channels
+    except (OSError, ValueError, KeyError, TypeError):
+        try:
+            return [tuple(c) for c in json.loads(cache.read_text(encoding="utf-8"))]
+        except (OSError, ValueError, TypeError):
+            return []
+
+
+def spotifyd_arch():
+    return {"armv7l": "armv7", "armv8l": "armv7", "aarch64": "aarch64", "arm64": "aarch64",
+            "x86_64": "x86_64", "amd64": "x86_64"}.get(os.uname().machine)
+
+
+def install_spotifyd():
+    """Download spotifyd's official 'default' build (with MPRIS), verify SHA-512, install to ~/.local/bin."""
+    arch = spotifyd_arch()
+    if not arch:
+        raise ValueError(f"spotifyd has no build for {os.uname().machine}.")
+    asset = f"spotifyd-linux-{arch}-default"
+    sums = fetch_url(SPOTIFYD_RELEASE + asset + ".sha512", 64 * 1024).decode("utf-8", "replace")
+    expected = next((token.lower() for token in sums.split() if re.fullmatch(r"[0-9a-fA-F]{128}", token)), None)
+    if not expected:
+        raise ValueError("The release checksum file was not readable.")
+    blob = fetch_url(SPOTIFYD_RELEASE + asset + ".tar.gz", 64 * 1024 * 1024)
+    if hashlib.sha512(blob).hexdigest() != expected:
+        raise ValueError("Checksum mismatch: download rejected.")
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as archive:
+        member = next((m for m in archive.getmembers() if m.isfile() and Path(m.name).name == "spotifyd"), None)
+        if member is None or member.size > 64 * 1024 * 1024:
+            raise ValueError("The archive did not contain spotifyd.")
+        install_binary(SPOTIFYD, archive.extractfile(member).read())
+    write_spotify_service()
+    return asset
+
+
+def write_spotify_service(name="Nightdeck"):
+    CONFIG.mkdir(mode=0o700, parents=True, exist_ok=True)
+    SPOTIFY_CONF.write_text("\n".join([
+        "# Written by Nightdeck. Spotify Connect speaker; pick it in the Spotify app (Premium).",
+        "[global]",
+        f'device_name = "{re.sub(r"[^A-Za-z0-9 _.-]", "", name)[:40] or "Nightdeck"}"',
+        'device_type = "computer"',
+        'backend = "pulseaudio"',
+        "use_mpris = true",
+        'dbus_type = "session"',
+        "bitrate = 160",
+        "volume_normalisation = true",
+        f'cache_path = "{CACHE / "spotifyd"}"',
+        "max_cache_size = 300000000",
+        ""]), encoding="utf-8")
+    SPOTIFY_UNIT.parent.mkdir(parents=True, exist_ok=True)
+    SPOTIFY_UNIT.write_text("\n".join([
+        "[Unit]", "Description=Spotify Connect for Nightdeck", "After=network-online.target pipewire-pulse.service", "",
+        "[Service]", f"ExecStart={SPOTIFYD} --no-daemon --config-path {SPOTIFY_CONF}",
+        "Restart=on-failure", "RestartSec=10", "", "[Install]", "WantedBy=default.target", ""]), encoding="utf-8")
+
+
+def user_systemctl(*args):
+    try:
+        return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True,
+                              timeout=20, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return subprocess.CompletedProcess(args, 1, "", str(error))
 
 
 def watch_file(item):

@@ -381,5 +381,136 @@ with tempfile.TemporaryDirectory() as home:
         s.send(key, wait)
     check("bluetooth session exits cleanly", s.finish() == 0)
 
+# 10. Music: background player with now-playing strip, dashboard keys, radio station (needs mpv + ffmpeg)
+import shutil as _shutil
+import http.server
+import threading
+if _shutil.which("mpv") and _shutil.which("ffmpeg"):
+    with tempfile.TemporaryDirectory() as home:
+        album = Path(home, "Music", "Album")
+        album.mkdir(parents=True)
+        Path(home, ".config", "mpv").mkdir(parents=True)
+        Path(home, ".config", "mpv", "mpv.conf").write_text("ao=null\n")  # no sound card in CI
+        for number, (title, hz, seconds) in enumerate((("Neon Rain", 330, 20), ("Chrome Hearts", 440, 20)), 1):
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                            f"sine=frequency={hz}:duration={seconds}", "-metadata", f"title={title}",
+                            "-metadata", "artist=Night City Ensemble", "-c:a", "libmp3lame", "-b:a", "64k",
+                            str(album / f"0{number}.mp3")], check=True)
+        serve = Path(home, "serve")
+        serve.mkdir()
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=550:duration=90",
+                        "-c:a", "libmp3lame", "-b:a", "64k", str(serve / "live.mp3")], check=True)
+
+        class Quiet(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kw):
+                super().__init__(*args, directory=str(serve), **kw)
+
+            def log_message(self, *args):
+                pass
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        station = f"http://127.0.0.1:{server.server_port}/live.mp3"
+        s = Session(80, 24, home=home)
+        s.pump(0.6)
+        for key, wait in [("x", 0.8), ("7", 0.8), (DOWN, 0.2), ("\r", 0.8), (DOWN, 0.2), ("\r", 0.8),
+                          (DOWN, 0.2), ("\r", 3.0), ("\x1b", 0.5)]:
+            s.send(key, wait)
+        s.pump(1.5)
+        menu = s.text()
+        check("music menu shows what's playing", "Playing · MUSIC  Neon Rain" in menu
+              and "Night City Ensemble" in menu and "/ 0:20" in menu and "Track 1 of 2" in menu)
+        check("compact strip in the bottom divider", "♪" in menu.splitlines()[-2] and "Neon Rain" in menu.splitlines()[-2])
+        s.send("\x1b", 1.2)
+        dash = s.text().splitlines()[-2]
+        check("dashboard strip replaces the ticker", "MUSIC" in dash and "Neon Rain · Night City Ensemble" in dash
+              and "/ 0:20" in dash)
+        s.send("]", 1.8)
+        check("] skips to the next track", "Chrome Hearts" in s.text().splitlines()[-2])
+        s.send(" ", 1.5)
+        check("space pauses", "||" in s.text().splitlines()[-2])
+        s.send(" ", 0.5)
+        # Stop, then add and play a radio station
+        for key, wait in [("7", 1.0), (DOWN * 5, 0.3), ("\r", 1.5)]:
+            s.send(key, wait)
+        check("stop ends playback", "Nothing playing" in s.text())
+        for key, wait in [("\r", 0.8), (DOWN * 8, 0.3), ("\r", 0.6), (station, 0.3), ("\r", 0.6), ("Test FM", 0.3),
+                          ("\r", 0.8), ("\r", 3.5)]:
+            s.send(key, wait)
+        s.pump(1.5)
+        check("custom radio station plays LIVE", "Test FM" in s.text() and "LIVE" in s.text())
+        stations = json.loads(Path(home, ".local/share/nightdeck/stations.json").read_text())
+        check("custom station saved", stations == [{"name": "Test FM", "url": station}])
+        for key, wait in [(DOWN * 3, 0.3), ("\r", 1.2), ("\x1b", 0.6)] + QUIT:  # Stop, back, jack out
+            s.send(key, wait)
+        check("music session exits cleanly", s.finish() == 0)
+        server.shutdown()
+        subprocess.run(["pkill", "-f", "nightdeck-music.sock|music.sock"], check=False)
+else:
+    print("skip music tests (needs mpv and ffmpeg)")
+
+# 11. Spotify Connect: playerctl now-playing takes over the strip; spotifyd install verifies checksums
+FAKE_PLAYERCTL = """#!/bin/sh
+echo "$@" >> "$HOME/playerctl.log"
+case "$*" in
+  *metadata*) printf 'Playing\\tDaft Punk\\tVeridis Quo\\t345000000\\t61000000\\n' ;;
+esac
+"""
+with tempfile.TemporaryDirectory() as home:
+    fake = Path(home, "bin")
+    fake.mkdir()
+    (fake / "playerctl").write_text(FAKE_PLAYERCTL)
+    (fake / "spotifyd").write_text("#!/bin/sh\n")
+    for tool in ("playerctl", "spotifyd"):
+        (fake / tool).chmod(0o755)
+    s = Session(80, 24, home=home, env={"PATH": f"{fake}:{os.environ['PATH']}"})
+    s.pump(0.6)
+    s.send("x", 2.0)
+    dash = s.text().splitlines()[-2]
+    check("Spotify shows in the dashboard strip", "SPOTIFY" in dash and "Veridis Quo · Daft Punk" in dash
+          and "/ 5:45" in dash)
+    s.send(" ", 0.6)
+    s.send("]", 0.6)
+    log = Path(home, "playerctl.log").read_text()
+    check("dashboard keys control Spotify", "-p spotifyd play-pause" in log and "-p spotifyd next" in log)
+    for key, wait in QUIT:
+        s.send(key, wait)
+    check("spotify session exits cleanly", s.finish() == 0)
+
+with tempfile.TemporaryDirectory() as tmp:
+    nd.HOME = Path(tmp)
+    nd.SPOTIFYD = Path(tmp, "bin", "spotifyd")
+    nd.CONFIG = Path(tmp, "config")
+    nd.CACHE = Path(tmp, "cache")
+    nd.SPOTIFY_CONF = nd.CONFIG / "spotifyd.conf"
+    nd.SPOTIFY_UNIT = Path(tmp, "systemd", "nightdeck-spotifyd.service")
+    payload = io_buf = __import__("io").BytesIO()
+    import tarfile as _tarfile
+    import hashlib as _hashlib
+    with _tarfile.open(fileobj=io_buf, mode="w:gz") as archive:
+        data = b"#!/bin/sh\necho spotifyd 0.4.2\n"
+        info = _tarfile.TarInfo("spotifyd")
+        info.size, info.mode = len(data), 0o755
+        archive.addfile(info, __import__("io").BytesIO(data))
+    blob = io_buf.getvalue()
+    arch = nd.spotifyd_arch()
+    files = {f"spotifyd-linux-{arch}-default.tar.gz": blob,
+             f"spotifyd-linux-{arch}-default.sha512":
+                 (_hashlib.sha512(blob).hexdigest() + f"  spotifyd-linux-{arch}-default.tar.gz\n").encode()}
+    nd.fetch_url = lambda url, limit: files[url.rsplit("/", 1)[-1]]
+    asset = nd.install_spotifyd()
+    check("spotifyd installed after SHA-512 check", nd.SPOTIFYD.read_bytes() == data
+          and os.access(nd.SPOTIFYD, os.X_OK) and asset.endswith("-default"))
+    unit = nd.SPOTIFY_UNIT.read_text()
+    conf = nd.SPOTIFY_CONF.read_text()
+    check("user service and config written", f"ExecStart={nd.SPOTIFYD} --no-daemon --config-path" in unit
+          and 'device_name = "Nightdeck"' in conf and 'backend = "pulseaudio"' in conf and "use_mpris = true" in conf)
+    files[f"spotifyd-linux-{arch}-default.tar.gz"] = blob + b"tampered"
+    try:
+        nd.install_spotifyd()
+        rejected = False
+    except ValueError as error:
+        rejected = "Checksum mismatch" in str(error)
+    check("tampered spotifyd download rejected", rejected)
+
 print("\n" + ("ALL PASSED" if not failures else f"{len(failures)} FAILED"))
 sys.exit(1 if failures else 0)
