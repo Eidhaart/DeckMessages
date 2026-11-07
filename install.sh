@@ -22,6 +22,8 @@ SESSION_FILE=/usr/share/wayland-sessions/netdeck.desktop
 KIOSK_BIN=/usr/local/bin/netdeck-kiosk
 SWITCH_ROOT=/usr/local/sbin/netdeck-switch-root
 SUDOERS=/etc/sudoers.d/netdeck
+MEDIAKEYS=/usr/local/sbin/netdeck-mediakeys
+MEDIAKEYS_UNIT=/etc/systemd/system/netdeck-mediakeys.service
 SWITCH_BIN="$BIN_DIR/netdeck-switch"
 JACK_LAUNCHER="$APP_DIR/netdeck-jack-in.desktop"
 RESTORE_AUTOSTART="$AUTOSTART_DIR/netdeck-restore.desktop"
@@ -54,10 +56,12 @@ remove_terminal_autostart() {
 if (( UNINSTALL )); then
   rm -f "$BIN" "$SESSION_BIN" "$SWITCH_BIN" "$BIN_DIR/netdeck-nightdeck" "$DESKTOP" "$JACK_LAUNCHER" "$RESTORE_AUTOSTART"
   if [[ -f "$AUTOSTART" ]]; then rm -f "$AUTOSTART"; say "login autostart removed"; fi
-  if [[ -e "$SESSION_FILE" || -e "$KIOSK_BIN" || -e "$SWITCH_ROOT" || -e "$SUDOERS" ]]; then
+  if [[ -e "$SESSION_FILE" || -e "$KIOSK_BIN" || -e "$SWITCH_ROOT" || -e "$SUDOERS" || -e "$MEDIAKEYS_UNIT" ]]; then
     say "removing the NETDECK//OS login session and session switcher (sudo)"
     [[ -x "$SWITCH_ROOT" ]] && sudo "$SWITCH_ROOT" --restore || true
-    sudo rm -f "$SESSION_FILE" "$KIOSK_BIN" "$SWITCH_ROOT" "$SUDOERS"
+    sudo systemctl disable --now netdeck-mediakeys.service >/dev/null 2>&1 || true
+    sudo rm -f "$SESSION_FILE" "$KIOSK_BIN" "$SWITCH_ROOT" "$SUDOERS" "$MEDIAKEYS" "$MEDIAKEYS_UNIT"
+    sudo systemctl daemon-reload >/dev/null 2>&1 || true
   fi
   remove_terminal_autostart
   say "netdeck uninstalled. config kept in ~/.config/netdeck, shards in ~/.local/share/netdeck"
@@ -128,6 +132,16 @@ if (( SESSION )); then
     say "${yel}note:${rst} couldn't add the sudo rule - switching will ask for your password"
   fi
   rm -f "$rule"
+
+  # media keys (volume, brightness, play) inside the NETDECK session - GNOME does this in Ubuntu
+  sudo install -o root -g root -m 0755 "$HERE/netdeck-mediakeys.py" "$MEDIAKEYS"
+  printf '%s\n' '[Unit]' 'Description=NETDECK//OS media keys (volume, brightness, play) for the NETDECK session' \
+    'After=systemd-logind.service' '' '[Service]' "ExecStart=$MEDIAKEYS" 'Restart=on-failure' 'RestartSec=3' '' \
+    '[Install]' 'WantedBy=multi-user.target' | sudo tee "$MEDIAKEYS_UNIT" >/dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now netdeck-mediakeys.service >/dev/null 2>&1 \
+    && say "media keys: volume, brightness and play/pause work in the deck session" \
+    || say "${yel}note:${rst} couldn't start the media-key service"
 
   # in Ubuntu: an app-menu launcher to jack into the deck, and a hidden cleanup that runs at login
   mkdir -p "$AUTOSTART_DIR"

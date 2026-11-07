@@ -1181,15 +1181,17 @@ RADIO = [  # key, name, group, url
 ]
 MPV_SOCK = os.path.join(CACHE_DIR, "mpv.sock")
 MPV_LABEL = os.path.join(CACHE_DIR, "mpv.label")
+OSD_FILE = os.path.join(CACHE_DIR, "osd")
 
 
 class Player:
-    def __init__(self):
+    def __init__(self, poll=True):
         self.now = None   # dict(source, name, artist, title, pos, dur, playing, live)
         saved = readf(MPV_LABEL).strip().split("\t")
         self.label = saved[0] or "BACKGROUND"
         self.station = saved[1] if len(saved) > 1 and saved[1] else None
-        threading.Thread(target=self._loop, daemon=True).start()
+        if poll:
+            threading.Thread(target=self._loop, daemon=True).start()
 
     # ---- deck-owned mpv
     def ipc(self, *cmd, timeout=0.4):
@@ -1765,6 +1767,10 @@ class Deck:
         self.toasts = []
         self.news = News()
         self.player = Player()
+        try:  # an OSD message left from before the deck started is not replayed
+            self._osd_m = os.stat(OSD_FILE).st_mtime
+        except OSError:
+            self._osd_m = 0
         self.next_news = 0.0
         self._pn = None  # panel number for the next panel() call
 
@@ -1890,6 +1896,7 @@ class Deck:
     def toast(self, title, body="", role="acc", secs=3.5):
         if not self.conf.get("toasts", True):
             return
+        self.toasts = [t for t in self.toasts if t[0] != title]
         self.toasts.append([title, body, role, time.time() + secs])
         self.toasts = self.toasts[-3:]
 
@@ -3745,6 +3752,32 @@ class Deck:
             self.put(y + 2, x + 2 + n, "▱" * (bw - n), self.pal("line", "tint"))
             self.put(y + 2, x + w - len(t) - 2, t, self.pal("dim", "tint"))
 
+    def check_osd(self):
+        """Show volume / brightness / mic changes made by the media-key service as a toast."""
+        try:
+            m = os.stat(OSD_FILE).st_mtime
+        except OSError:
+            return
+        if m == self._osd_m:
+            return
+        self._osd_m = m
+        f = (readf(OSD_FILE).strip().split("|") + ["", "", ""])[:3]
+        kind, val, flag = f
+        if kind in ("VOLUME", "BRIGHTNESS"):
+            try:
+                pct = max(0, min(100, int(val)))
+            except ValueError:
+                return
+            n = pct // 5
+            body = "▰" * n + "▱" * (20 - n) + f"  {pct}%"
+            if flag == "MUTED":
+                body = "▱" * 20 + "  MUTED"
+            self.toast(f"{'音量' if kind == 'VOLUME' else '輝度'} // {kind}", body,
+                       "bad" if flag == "MUTED" else ("acc" if kind == "VOLUME" else "hi"), 1.6)
+        elif kind == "MIC":
+            self.toast("MIC // " + val, "microphone " + ("muted" if val == "MUTED" else "live"),
+                       "bad" if val == "MUTED" else "ok", 1.6)
+
     def music_entries(self):
         out = [("spotify", "Spotify", "STREAMING", "desktop app if installed, else the web player")]
         out += [(k, name, group, url) for k, name, group, url in RADIO]
@@ -5209,6 +5242,7 @@ class Deck:
                               (" · ", "dim"), (f"{len(c.bins)} binaries", "hi"),
                               (f" in {len(c.cats)} categories", "dim")], tag="ARSENAL", tag_role="acc")
             self.drain_jobs()
+            self.check_osd()
             while self.notes:
                 self.log(*self.notes.popleft())
             self.ambient(self.now)
@@ -5299,6 +5333,7 @@ def main():
     ap.add_argument("--no-fx", action="store_true", help="disable glitches and animations")
     ap.add_argument("--theme", help="color theme: " + ", ".join(THEMES) + " or a custom one")
     ap.add_argument("--term-opts", metavar="TERMINAL", help=argparse.SUPPRESS)
+    ap.add_argument("--media", choices=["playpause", "next", "prev", "stop"], help=argparse.SUPPRESS)
     ap.add_argument("--palette", action="store_true", help="print the current skin's colors (role #hex) and exit")
     ap.add_argument("--list-apps", action="store_true", help="print the categorized program list and exit")
     ap.add_argument("--version", action="version", version=f"NETDECK//OS {VERSION}")
@@ -5307,6 +5342,11 @@ def main():
     if args.list_apps:
         list_apps_text()
         return
+    if args.media:
+        p = Player(poll=False)
+        ok = {"playpause": p.toggle, "next": lambda: p.skip(1), "prev": lambda: p.skip(-1),
+              "stop": lambda: p.stop() or p._ctl(["stop"])}[args.media]()
+        sys.exit(0 if ok else 1)
     if args.palette:
         for role, hexv in resolve_theme(load_conf()).items():
             print(role, hexv)

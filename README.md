@@ -42,6 +42,10 @@ This uses a small root helper, `/usr/local/sbin/netdeck-switch-root`, which does
 `/etc/sudoers.d/netdeck` lets your user run it without a password. `./install.sh --uninstall` removes both.
 
 - **No password at boot:** Settings → System → Users → **Automatic Login**. Power on, and the deck boots.
+- **Laptop keys:** volume, mute, mic mute, brightness and play/pause/next/previous work in the NETDECK session too,
+  each with an on-screen indicator in the deck. GNOME handles these keys in Ubuntu but isn't running in the deck, so
+  `--session` installs a small service, `netdeck-mediakeys`, that handles them only while the NETDECK session is
+  active. Volume goes through PipeWire, so it's the same volume as in Ubuntu.
 - **Multiple monitors:** in the NETDECK session the deck uses only the laptop's built-in screen, and other monitors
   are switched off for that session. Your Ubuntu session keeps its own monitor setup. To use a different screen, put
   `NETDECK_OUTPUT="HDMI-A-1"` in `~/.config/netdeck/session.conf` (`wlr-randr` in the deck's shell lists the names).
