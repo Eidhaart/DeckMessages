@@ -105,6 +105,8 @@ with tempfile.TemporaryDirectory() as home:
     fake.mkdir()
     (fake / "mpv").write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$HOME/mpv.args"\n')
     (fake / "mpv").chmod(0o755)
+    (fake / "qjs").write_text("#!/bin/sh\n")
+    (fake / "qjs").chmod(0o755)
     Path(home, "Videos").mkdir()
     Path(home, "Videos", "clip.mp4").write_bytes(b"x")
     env = {"PATH": f"{fake}:{os.environ['PATH']}", "DISPLAY": "", "WAYLAND_DISPLAY": ""}
@@ -133,7 +135,8 @@ with tempfile.TemporaryDirectory() as home:
     fake.mkdir()
     (fake / "mpv").write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$HOME/mpv.args"\n')
     (fake / "yt-dlp").write_text('#!/bin/sh\nfor a; do last=$a; done\necho "Title of ${last##*=}"\n')
-    for tool in ("mpv", "yt-dlp"):
+    (fake / "qjs").write_text("#!/bin/sh\n")
+    for tool in ("mpv", "yt-dlp", "qjs"):
         (fake / tool).chmod(0o755)
     env = dict(os.environ, HOME=home, PATH=f"{fake}:{os.environ['PATH']}")
     app = str(Path(__file__).resolve().parent.parent / "nightdeck.py")
@@ -163,12 +166,36 @@ with tempfile.TemporaryDirectory() as home:
     check("play all new sends every link to mpv", played[-4:] == [
         "https://example.com/c?v=live", "https://www.youtube.com/watch?v=zsh1&t=5",
         "https://example.com/b?v=xyz", "https://www.youtube.com/watch?v=abc&t=10"])
+    check("mpv is pointed at our yt-dlp", any(arg == "--script-opts-append=ytdl_hook-ytdl_path=" + str(fake / "yt-dlp")
+                                              for arg in played))
     check("played links marked watched", "WATCH LIST // 0 new" in s.text())
     for key, wait in [("\x1b", 0.4), ("\x1b", 0.4)] + QUIT:
         s.send(key, wait)
     check("watch list exits cleanly", s.finish() == 0)
     out = subprocess.run([sys.executable, app, "clear"], capture_output=True, text=True, env=env)
     check("clear removes watched", "0 left" in out.stdout)
+
+# 8. YouTube needs a JavaScript runtime: QuickJS is enabled only for a new enough yt-dlp
+import importlib.util
+spec = importlib.util.spec_from_file_location("nightdeck_mod", Path(__file__).resolve().parent.parent / "nightdeck.py")
+nd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(nd)
+with tempfile.TemporaryDirectory() as tmp:
+    fake = Path(tmp)
+    for name, body in (("new", "echo 2026.10.26"), ("old", "echo 2025.04.30"), ("qjs", "")):
+        (fake / name).write_text("#!/bin/sh\n" + body + "\n")
+        (fake / name).chmod(0o755)
+    saved = os.environ["PATH"]
+    os.environ["PATH"] = f"{fake}:/usr/bin:/bin"
+    try:
+        check("QuickJS enabled for current yt-dlp", nd.ytdlp_js_options(str(fake / "new")) == ["--js-runtimes", "quickjs"])
+        check("old Debian yt-dlp gets no unknown flag", nd.ytdlp_js_options(str(fake / "old")) == [])
+        nd.YTDLP_LOCAL = fake / "old"
+        check("old yt-dlp flagged in the menu", "too old" in nd.ytdlp_status())
+        nd.YTDLP_LOCAL = fake / "new"
+        check("current yt-dlp + QuickJS reported ready", nd.ytdlp_status() == "YouTube: yt-dlp 2026.10.26 + QuickJS ready.")
+    finally:
+        os.environ["PATH"] = saved
 
 print("\n" + ("ALL PASSED" if not failures else f"{len(failures)} FAILED"))
 sys.exit(1 if failures else 0)

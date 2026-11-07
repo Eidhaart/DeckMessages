@@ -3,6 +3,7 @@
 import curses
 import datetime
 import fcntl
+import hashlib
 import json
 import locale
 import os
@@ -53,6 +54,8 @@ REMOTE_DIR = re.compile(r"[A-Za-z0-9_./~-]{0,200}")
 CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash"
 VIDEOS = HOME / "Videos"
 WATCH = DATA / "watchlist.json"
+YTDLP_LOCAL = HOME / ".local/bin/yt-dlp"
+YTDLP_RELEASE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
 WATCH_MAX = 500
 MEDIA_EXT = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".ts", ".ogv", ".flv",
              ".wmv", ".3gp", ".mp3", ".flac", ".ogg", ".oga", ".opus", ".wav", ".m4a", ".aac"}
@@ -1404,17 +1407,16 @@ class Deck:
         selected = 0
         while True:
             mpv = shutil.which("mpv")
-            intro = ["mpv ready." if mpv else "mpv is not installed.",
-                     "Streams from YouTube and similar sites: " +
-                     ("yt-dlp ready." if shutil.which("yt-dlp") else "install yt-dlp."),
+            intro = ["mpv ready." if mpv else "mpv is not installed.", ytdlp_status(),
                      "Keys while playing: " + MPV_KEYS]
-            options = [] if mpv else [("Install mpv and yt-dlp", self.video_install)]
+            options = [] if mpv and shutil.which("qjs") else [("Install mpv and QuickJS", self.video_install)]
             options += [
                 (f"Watch list ({sum(not i['done'] for i in load_watch())} new)", self.watch_list),
                 ("Browse ~/Videos", lambda: self.video_pick(VIDEOS)),
                 ("Play file by path", self.video_path),
                 ("Play a URL or stream", self.video_url),
                 ("Output / " + self.preferences["video_out"].capitalize(), self.video_output_cycle),
+                ("Update yt-dlp", self.video_update),
             ]
             choice = self.menu("VIDEO // " + ("mpv" if mpv else "player offline"),
                                [label for label, _ in options], intro=intro, selected=selected)
@@ -1465,9 +1467,18 @@ class Deck:
             edit_watch(lambda items: [i.update(done=True) for i in items if i["url"] in urls])
 
     def video_install(self):
-        args = ["sudo", "apt-get", "install", "--no-install-recommends", "mpv", "yt-dlp"]
+        args = ["sudo", "apt-get", "install", "--no-install-recommends", "mpv", "quickjs"]
         if self.confirm("VIDEO // install player", args):
             self.run(args)
+            if not ytdlp_path():
+                self.video_update()
+
+    def video_update(self):
+        try:
+            version = self.busy("VIDEO // yt-dlp", "Downloading the latest yt-dlp release", update_ytdlp)
+            self.notice("VIDEO", f"yt-dlp {version} installed and checksum verified.")
+        except (OSError, ValueError) as error:
+            self.notice("VIDEO", f"Update failed: {error}", ok=False)
 
     def video_output_cycle(self):
         settings = dict(self.preferences)
@@ -1562,6 +1573,11 @@ class Deck:
         if output is None:
             return
         args = [mpv, "--save-position-on-quit", "--ytdl-format=" + YTDL_FORMAT]
+        ytdlp = ytdlp_path()
+        if ytdlp:
+            args.append("--script-opts-append=ytdl_hook-ytdl_path=" + ytdlp)
+            if ytdlp_js_options(ytdlp):
+                args.append("--ytdl-raw-options-append=js-runtimes=quickjs")
         if output == "screen":
             args += ["--fs", "--hwdec=auto-safe", "--profile=fast"]
             if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
@@ -1571,7 +1587,11 @@ class Deck:
             if self.basic:
                 args.append("--vo-tct-256=yes")
         args += ["--", *map(str, targets)]
-        return self.run(args, pause=False) == 0
+        code = self.run(args, pause=False)
+        if code not in (0, None) and any(str(t).startswith(("http://", "https://")) for t in targets):
+            self.notice("VIDEO", "The stream did not play. Video sites change often: choose "
+                        "Update yt-dlp in Video player, then try again. " + ytdlp_status(), ok=False)
+        return code == 0
 
     def claude(self):
         """Claude Code: run it here on 64-bit hardware, or on a bigger machine over SSH."""
@@ -1812,6 +1832,82 @@ def edit_watch(change):
         return result
 
 
+def ytdlp_path():
+    """Prefer the self-updating release in ~/.local/bin over Debian's older package."""
+    if YTDLP_LOCAL.is_file() and os.access(YTDLP_LOCAL, os.X_OK):
+        return str(YTDLP_LOCAL)
+    return shutil.which("yt-dlp")
+
+
+_YTDLP_VERSIONS = {}
+
+
+def ytdlp_version(path):
+    try:
+        key = (path, Path(path).stat().st_mtime)
+    except (OSError, TypeError):
+        return ""
+    if key not in _YTDLP_VERSIONS:
+        try:
+            out = subprocess.run([path, "--version"], capture_output=True, text=True,
+                                 timeout=60, check=False).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        _YTDLP_VERSIONS[key] = out if re.fullmatch(r"\d{4}\.\d{2}\.\d{2}(?:\.\d+)?", out) else ""
+    return _YTDLP_VERSIONS[key]
+
+
+def ytdlp_js_options(path):
+    """YouTube needs a JavaScript runtime since yt-dlp 2025.11. Deno has no 32-bit ARM build, so use QuickJS."""
+    version = ytdlp_version(path)
+    if version >= "2025.11" and not shutil.which("deno") and shutil.which("qjs"):
+        return ["--js-runtimes", "quickjs"]
+    return []
+
+
+def ytdlp_status():
+    path = ytdlp_path()
+    if not path:
+        return "YouTube: yt-dlp missing. Choose Update yt-dlp."
+    version = ytdlp_version(path)
+    if not version or version < "2025.11":
+        return f"YouTube: yt-dlp {version or '(unknown version)'} is too old. Choose Update yt-dlp."
+    if not (shutil.which("deno") or shutil.which("qjs")):
+        return f"YouTube: yt-dlp {version}, needs QuickJS: sudo apt install quickjs"
+    return f"YouTube: yt-dlp {version} + " + ("Deno" if shutil.which("deno") else "QuickJS") + " ready."
+
+
+def update_ytdlp():
+    """Download the latest official yt-dlp release, check its SHA-256, install it to ~/.local/bin."""
+    def fetch(name, limit):
+        request = urllib.request.Request(YTDLP_RELEASE + name, headers={"User-Agent": "Nightdeck/" + VERSION})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            if urlsplit(response.geturl()).scheme != "https":
+                raise ValueError("Download redirected away from HTTPS.")
+            data = response.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError(name + " is larger than expected.")
+        return data
+    sums = fetch("SHA2-256SUMS", 64 * 1024).decode("utf-8", "replace")
+    expected = next((line.split()[0].lower() for line in sums.splitlines()
+                     if len(line.split()) == 2 and line.split()[1].lstrip("*") == "yt-dlp"), None)
+    if not expected or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError("Release checksums did not list yt-dlp.")
+    binary = fetch("yt-dlp", 64 * 1024 * 1024)
+    if hashlib.sha256(binary).hexdigest() != expected:
+        raise ValueError("Checksum mismatch: download rejected.")
+    YTDLP_LOCAL.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=YTDLP_LOCAL.parent, delete=False) as file:
+        temp = Path(file.name)
+        file.write(binary)
+    try:
+        temp.chmod(0o755)
+        temp.replace(YTDLP_LOCAL)
+    finally:
+        temp.unlink(missing_ok=True)
+    return ytdlp_version(str(YTDLP_LOCAL)) or "installed"
+
+
 def drop_watched(items):
     items[:] = [item for item in items if not item["done"]]
     return len(items)
@@ -1826,12 +1922,13 @@ def watch_label(item):
 
 def fetch_titles():
     """Look up titles for new links with yt-dlp. Runs detached after `nightdeck add`."""
-    ytdlp = shutil.which("yt-dlp")
+    ytdlp = ytdlp_path()
     if not ytdlp:
         return
+    extra = ytdlp_js_options(ytdlp)
     for url in [item["url"] for item in load_watch() if not item["title"] and not item["tried"]]:
         try:
-            result = subprocess.run([ytdlp, "--no-warnings", "--skip-download", "--no-playlist",
+            result = subprocess.run([ytdlp, *extra, "--no-warnings", "--skip-download", "--no-playlist",
                                      "--print", "title", "--", url],
                                     capture_output=True, text=True, timeout=90, check=False)
             title = clean(result.stdout.strip().splitlines()[0])[:200] if result.returncode == 0 \
@@ -1851,7 +1948,8 @@ def command_line(args):
              "       nightdeck add URL...      add links to the watch list (or one per line on stdin)\n"
              "       nightdeck list            show the watch list\n"
              "       nightdeck remove N        remove entry N from the list\n"
-             "       nightdeck clear           remove watched entries")
+             "       nightdeck clear           remove watched entries\n"
+             "       nightdeck update-ytdlp    install or update yt-dlp for YouTube")
     name, rest = args[0], args[1:]
     if name == "add":
         if not rest and sys.stdin.isatty():
@@ -1881,7 +1979,7 @@ def command_line(args):
             print(("[ OK ] queued   " if ok else "[ !! ] skipped  ") + display_line(link)[:200]
                   + ("" if ok else "  (not an http(s) link)"))
         print(f"{added} new, {len(good) - added} moved to the top. Watch list: {len(load_watch())} links.")
-        if good and shutil.which("yt-dlp"):
+        if good and ytdlp_path():
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "titles"],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
@@ -1901,6 +1999,15 @@ def command_line(args):
     if name == "clear":
         count = edit_watch(drop_watched)
         print(f"Removed watched entries. {count} left.")
+        return 0
+    if name == "update-ytdlp":
+        try:
+            print("[ OK ] yt-dlp " + update_ytdlp() + " installed in " + str(YTDLP_LOCAL))
+        except (OSError, ValueError) as error:
+            print(f"[ !! ] yt-dlp update failed: {error}", file=sys.stderr)
+            return 1
+        if not (shutil.which("deno") or shutil.which("qjs")):
+            print("[ !! ] YouTube also needs QuickJS: sudo apt install quickjs")
         return 0
     if name == "titles":
         fetch_titles()

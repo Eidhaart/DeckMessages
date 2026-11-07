@@ -22,15 +22,16 @@ if [ "$packages" -eq 1 ]; then
     if ! command -v micro >/dev/null; then
         sudo apt-get install --no-install-recommends micro || printf '%s\n' 'Using nano.'
     fi
-    if ! command -v yt-dlp >/dev/null; then
-        sudo apt-get install --no-install-recommends yt-dlp || printf '%s\n' 'Skipping yt-dlp: URL streams from video sites unavailable.'
-    fi
+    # YouTube needs a JavaScript runtime for yt-dlp; QuickJS is the one that runs on 32-bit Pi OS.
+    sudo apt-get install --no-install-recommends quickjs || printf '%s\n' 'Skipping QuickJS: YouTube may not play.'
 fi
 install -d "$HOME/.local/bin"
 temp=$(mktemp "$HOME/.local/bin/.nightdeck.XXXXXX")
 trap 'rm -f -- "$temp"' EXIT HUP INT TERM
 install -m 0755 nightdeck.py "$temp"
 mv -fT -- "$temp" "$HOME/.local/bin/nightdeck"
+# Debian's yt-dlp falls behind YouTube; install the official release (checksum-verified) per user.
+python3 "$HOME/.local/bin/nightdeck" update-ytdlp || printf '%s\n' 'yt-dlp update failed; retry later from Video player > Update yt-dlp.'
 
 # Console boot: log this user in on the Pi's own screen (tty1) so the deck opens there.
 user=$(id -un)
