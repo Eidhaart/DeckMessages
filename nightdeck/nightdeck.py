@@ -2103,35 +2103,133 @@ class Deck:
             self.bt_pair(mac, name)
 
     def bt_pair(self, mac, name):
-        self.run(["bluetoothctl", "--timeout", "40", "pair", mac], pause=False)
-        if bt_info(mac).get("Paired") != "yes":
-            self.notice("BLUETOOTH", f"Pairing with {name} did not finish. Put it in pairing mode and try again. "
-                        "If it asked for a PIN, type it on the device.", ok=False)
+        """Pair, trust and connect in ONE bluetoothctl session, answering PIN/passkey prompts on screen.
+
+        Doing these as separate commands is too slow: headphones drop a fresh pairing when nothing
+        connects to them right away.
+        """
+        if shutil.which("wpctl"):  # sound services must be up so headphones find an audio endpoint
+            user_systemctl("start", "pipewire.socket", "pipewire", "wireplumber")
+        try:
+            proc = subprocess.Popen(["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError:
+            self.notice("BLUETOOTH", "bluetoothctl could not start.", ok=False)
             return
-        btctl("trust", mac)
-        self.bt_connect(mac, name)
+        output = {"text": ""}
+
+        def reader():
+            while True:
+                try:
+                    chunk = os.read(proc.stdout.fileno(), 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output["text"] += ANSI.sub("", chunk.decode("utf-8", "replace")).replace("\r", "\n")
+        threading.Thread(target=reader, daemon=True).start()
+
+        def send(line):
+            try:
+                proc.stdin.write((line + "\n").encode())
+                proc.stdin.flush()
+            except OSError:
+                pass
+        for line in ("power on", "agent KeyboardDisplay", "default-agent", "pair " + mac):
+            send(line)
+        stage, seen, result, start = "pair", 0, None, time.monotonic()
+        try:
+            while result is None:
+                text = output["text"]
+                fresh, seen = text[seen:], len(text)
+                if stage == "pair":
+                    prompt = re.search(r"Confirm passkey (\d+)|Request confirmation", fresh)
+                    pin = re.search(r"Enter PIN code|Request PIN code|Enter passkey", fresh)
+                    shown = re.search(r"Passkey: (\d+)|PIN code: (\w+)", fresh)
+                    if prompt:
+                        code = prompt.group(1) or ""
+                        ok = self.menu("BLUETOOTH // confirm", ["Yes, it matches", "No, cancel"], intro=[
+                            f"{name} shows a code" + (f": {code}" if code else "") + ". Does it match?"]) == 0
+                        send("yes" if ok else "no")
+                        start = time.monotonic()
+                    elif pin:
+                        value = self.ask(f"BLUETOOTH // PIN for {name} (often 0000)", prefix="")
+                        send(value or "0000")
+                        start = time.monotonic()
+                    elif shown:
+                        self.notice("BLUETOOTH", f"Type {shown.group(1) or shown.group(2)} on {name}, then press "
+                                    "Enter on it. Close this message after typing it.")
+                        start = time.monotonic()
+                    if "Authorize service" in fresh:
+                        send("yes")
+                    if re.search(r"Pairing successful|AlreadyExists", text):
+                        stage = "connect"
+                        send("trust " + mac)
+                        send("connect " + mac)
+                        start = time.monotonic()
+                    elif re.search(r"Failed to pair|AuthenticationFailed|AuthenticationCanceled|ConnectionAttemptFailed|"
+                                   r"not available", text):
+                        result = "pair-failed"
+                elif re.search(r"Connection successful", text):
+                    result = "connected"
+                elif re.search(r"Failed to connect", text):
+                    result = "paired-only"
+                if result is None and time.monotonic() - start > (45 if stage == "pair" else 25):
+                    result = "pair-failed" if stage == "pair" else "paired-only"
+                height, width = self.frame("BLUETOOTH // " + ("pairing " if stage == "pair" else "connecting ") + name,
+                                           [("wait", "Bluetooth working")])
+                spin = self.g["spin"][int(time.monotonic() * 8) % len(self.g["spin"])]
+                self.put(5, spin + (" Pairing. Keep the device in pairing mode." if stage == "pair"
+                                    else " Paired. Connecting..."), HINT, True, column=2)
+                lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("[DEL]")]
+                for row, line in enumerate(lines[-max(1, height - 11):], 7):
+                    self.put(row, clean(line)[:width - 4], DIM, column=2)
+                self.screen.refresh()
+                time.sleep(0.15)
+        finally:
+            send("quit")
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        if result == "pair-failed":
+            self.notice("BLUETOOTH", f"Pairing with {name} failed. Put it in pairing mode again (hold its power "
+                        "button until the light flashes) and choose it once more.", ok=False)
+            return
+        if result == "paired-only":
+            self.notice("BLUETOOTH", f"{name} is paired but did not connect. Choose Paired devices, then Connect. "
+                        "If it keeps dropping, reboot the deck once so the sound services start.", ok=False)
+            return
+        info = self.busy("BLUETOOTH", f"Switching sound to {name}", lambda: self.bt_route_sound(mac, name))
+        sound = info.get("kind") in ("headphones", "speaker")
+        self.notice("BLUETOOTH", f"Connected to {name}." + (" Sound now plays there." if sound else ""))
+
+    def bt_route_sound(self, mac, name):
+        """Make a just-connected headphone/speaker the default output; returns its info."""
+        info = bt_info(mac)
+        if info.get("kind") in ("headphones", "speaker"):
+            for _ in range(16):  # PipeWire adds the Bluetooth output a moment after connecting
+                sinks = audio_sinks()
+                sink = next((item for item in sinks if item["bt"] and
+                             item["desc"] in (info.get("Alias"), name)), None) or \
+                    next((item for item in sinks if item["bt"]), None)
+                if sink:
+                    wpctl("set-default", str(sink["id"]))
+                    break
+                time.sleep(0.5)
+        return info
 
     def bt_connect(self, mac, name):
         def connect():
             btctl("connect", mac, timeout=30)
-            info = bt_info(mac)
-            if info.get("Connected") != "yes":
-                return False, info
-            if info["kind"] in ("headphones", "speaker"):
-                for _ in range(16):  # PipeWire adds the Bluetooth output a moment after connecting
-                    sink = next((item for item in audio_sinks() if item["bt"] and
-                                 (item["desc"] == info.get("Alias") or item["desc"] == name)), None) or \
-                        next((item for item in audio_sinks() if item["bt"]), None)
-                    if sink:
-                        wpctl("set-default", str(sink["id"]))
-                        return True, info
-                    time.sleep(0.5)
-            return True, info
+            if bt_info(mac).get("Connected") != "yes":
+                return False, {}
+            return True, self.bt_route_sound(mac, name)
         ok, info = self.busy("BLUETOOTH", f"Connecting to {name}", connect)
         if not ok:
             self.notice("BLUETOOTH", f"Could not connect to {name}. Make sure it is on and nearby.", ok=False)
             return
-        sound = info["kind"] in ("headphones", "speaker")
+        sound = info.get("kind") in ("headphones", "speaker")
         self.notice("BLUETOOTH", f"Connected to {name}." + (" Sound now plays there." if sound else ""))
 
     def bt_paired(self):

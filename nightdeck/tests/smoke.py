@@ -265,6 +265,36 @@ if a[:1] == ["--timeout"]:
     a = a[2:]
 cmd, rest = (a[0], a[1:]) if a else ("", [])
 known = st["known"]
+if not a:  # interactive session fed on stdin, like Nightdeck's pairing
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
+        words = line.split()
+        if not words:
+            continue
+        if words[0] == "quit":
+            break
+        mac = words[1] if len(words) > 1 else ""
+        d = known.get(mac)
+        if words[0] == "pair":
+            if not d:
+                print(f"Device {mac} not available", flush=True); continue
+            print(f"Attempting to pair with {mac}", flush=True)
+            if d["icon"].startswith("input"):
+                sys.stdout.write("[agent] Confirm passkey 123456 (yes/no): "); sys.stdout.flush()
+                if sys.stdin.readline().strip() != "yes":
+                    print("Failed to pair: org.bluez.Error.AuthenticationRejected", flush=True); continue
+            d["paired"] = True
+            print(f"[CHG] Device {mac} Paired: yes\nPairing successful", flush=True)
+        elif words[0] == "trust" and d:
+            d["trusted"] = True; print(f"Changing {mac} trust succeeded", flush=True)
+        elif words[0] == "connect" and d:
+            d["connected"] = True; print("Connection successful", flush=True)
+        else:
+            print("Changing " + " ".join(words) + " succeeded", flush=True)
+        json.dump(st, open(state_file, "w"))
+    sys.exit()
 if cmd == "show":
     print("Controller B8:27:EB:00:00:00 (public)\n\tName: nightdeck\n\tPowered: " + ("yes" if st["powered"] else "no"))
 elif cmd == "power":
@@ -357,6 +387,13 @@ with tempfile.TemporaryDirectory() as home:
           "Connected to WH-1000XM4. Sound now plays there." in s.text() and wp.get("default") == 77)
     bt = json.loads(Path(home, "bt.json").read_text())["known"]["AA:BB:CC:00:00:01"]
     check("headphones paired and trusted", bt.get("paired") and bt.get("trusted") and bt.get("connected"))
+    s.send("\r", 1.5)
+    for key, wait in [("\r", 3.0), ("\r", 3.0)]:  # scan again, pick MX Keys (the only unpaired one)
+        s.send(key, wait)
+    check("passkey confirmation asked on screen", "MX Keys shows a code: 123456. Does it match?" in s.text())
+    s.send("\r", 4.0)
+    check("keyboard paired after confirming the code", "Connected to MX Keys." in s.text()
+          and json.loads(Path(home, "bt.json").read_text())["known"]["AA:BB:CC:00:00:02"].get("paired"))
     s.send("\r", 1.5)
     check("menu shows connected device and its output", "connected: WH-1000XM4" in s.text()
           and "Sound: WH-1000XM4" in s.text())
