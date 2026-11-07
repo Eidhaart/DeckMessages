@@ -1844,7 +1844,8 @@ def command_line(args):
             print(usage, file=sys.stderr)
             return 2
         links = rest or [line.strip() for line in sys.stdin.read(256 * 1024).splitlines()]
-        links = [link for link in links if link]
+        # zsh's url-quote-magic escapes ?, = and & while pasting; inside quotes the backslashes stay.
+        links = [re.sub(r"\\([?=&#%+!*;~])", r"\1", link) for link in links if link]
         good = [link for link in links if public_url(link, ("https", "http"), allow_query=True)]
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -1909,8 +1910,16 @@ if __name__ == "__main__":
     configure_locale()
     if len(sys.argv) > 1:
         sys.exit(command_line(sys.argv[1:]))
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("nightdeck: the deck needs a terminal. Over SSH use `ssh -t`, "
+              "or run `nightdeck help` for commands.", file=sys.stderr)
+        sys.exit(2)
     try:
         os.environ["NIGHTDECK"] = "1"  # child shells must not autostart another deck
         sys.exit(curses.wrapper(lambda screen: Deck(screen).main()) or 0)
     except KeyboardInterrupt:
         sys.exit(130)
+    except curses.error as error:
+        print(f"nightdeck: this terminal can't run the deck ({error}). "
+              "Check TERM, e.g. TERM=xterm-256color.", file=sys.stderr)
+        sys.exit(2)

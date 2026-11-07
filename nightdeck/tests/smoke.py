@@ -138,21 +138,28 @@ with tempfile.TemporaryDirectory() as home:
     out = subprocess.run([sys.executable, app, "add"], input=links, capture_output=True, text=True, env=env)
     check("add via stdin keeps ? and & intact", "queued   https://www.youtube.com/watch?v=abc&t=10" in out.stdout
           and "skipped  not a link" in out.stdout and out.returncode == 1)
+    out = subprocess.run([sys.executable, app, "add", "https://www.youtube.com/watch\\?v\\=zsh1\\&t\\=5"],
+                         capture_output=True, text=True, env=env)
+    check("zsh paste backslashes stripped", "queued   https://www.youtube.com/watch?v=zsh1&t=5" in out.stdout)
+    out = subprocess.run([sys.executable, app], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    check("no terminal gives a clear message", out.returncode == 2 and "needs a terminal" in out.stderr
+          and "Traceback" not in out.stderr)
     time.sleep(1.5)
     listing = subprocess.run([sys.executable, app, "list"], capture_output=True, text=True, env=env).stdout
     check("titles fetched in the background", "Title of abc&t" in listing or "Title of 10" in listing)
     s = Session(80, 24, home=home, env={"PATH": env["PATH"], "DISPLAY": "", "WAYLAND_DISPLAY": ""})
     s.pump(0.6)
     s.send("x", 1.2)
-    check("dashboard shows queue count", "QUEUE    2 new" in s.text())
+    check("dashboard shows queue count", "QUEUE    3 new" in s.text())
     subprocess.run([sys.executable, app, "add", "https://example.com/c?v=live"], capture_output=True, env=env)
     s.pump(1.5)
-    check("new link flashes on the dashboard", "NEW LINK" in s.text() and "QUEUE    3 new" in s.text())
+    check("new link flashes on the dashboard", "NEW LINK" in s.text() and "QUEUE    4 new" in s.text())
     for key, wait in [("6", 0.6), ("\r", 0.6), ("\r", 1.0)]:
         s.send(key, wait)
     played = Path(home, "mpv.args").read_text().splitlines() if Path(home, "mpv.args").exists() else []
-    check("play all new sends every link to mpv", played[-3:] == [
-        "https://example.com/c?v=live", "https://example.com/b?v=xyz", "https://www.youtube.com/watch?v=abc&t=10"])
+    check("play all new sends every link to mpv", played[-4:] == [
+        "https://example.com/c?v=live", "https://www.youtube.com/watch?v=zsh1&t=5",
+        "https://example.com/b?v=xyz", "https://www.youtube.com/watch?v=abc&t=10"])
     check("played links marked watched", "WATCH LIST // 0 new" in s.text())
     for key, wait in [("\x1b", 0.4), ("\x1b", 0.4)] + QUIT:
         s.send(key, wait)
