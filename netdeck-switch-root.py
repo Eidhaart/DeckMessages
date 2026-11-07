@@ -114,6 +114,20 @@ def write(conf, lines):
     os.replace(tmp, conf)
 
 
+def deck_sessions(username):
+    """Login session ids of this user that run the NETDECK session."""
+    out = []
+    r = subprocess.run(["loginctl", "list-sessions", "--no-legend"], capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        f = line.split()
+        if len(f) >= 3 and f[2] == username:
+            d = subprocess.run(["loginctl", "show-session", f[0], "-p", "Desktop", "--value"],
+                               capture_output=True, text=True).stdout.strip().lower()
+            if "netdeck" in d:
+                out.append(f[0])
+    return out
+
+
 def main():
     if os.geteuid() != 0:
         die("needs root (use: sudo netdeck-switch-root deck|ubuntu)")
@@ -138,7 +152,18 @@ def main():
             os.remove(m)
         except OSError:
             pass
-    subprocess.run(["systemctl", "--no-block", "restart", "display-manager"])
+    # This helper runs inside the session it may end, so the last steps run as a transient system job:
+    # end the NETDECK session (when leaving it, so nothing it started keeps running), then restart the login screen.
+    steps = []
+    if sys.argv[1] == "ubuntu":
+        steps += [f"loginctl terminate-session {sid}" for sid in deck_sessions(user.pw_name)
+                  if re.fullmatch(r"[A-Za-z0-9]+", sid)]
+    steps.append("systemctl restart display-manager")
+    r = subprocess.run(["systemd-run", "--quiet", "--collect", "--no-block", f"--unit=netdeck-switch-{os.getpid()}",
+                        "/bin/sh", "-c", "; ".join(steps)], capture_output=True)
+    if r.returncode != 0:  # no systemd-run: do it directly
+        for st in steps:
+            subprocess.run(st.split())
 
 
 if __name__ == "__main__":

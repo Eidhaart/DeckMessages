@@ -137,3 +137,9 @@ while :; do
   run_terminal
   [[ -e "$FLAG" ]] || break
 done
+
+# Leaving the NETDECK session: end the whole login session so nothing it started (music, browser windows,
+# background jobs) keeps running once you're back in Ubuntu.
+if [[ $MODE == kiosk-inner && -n ${XDG_SESSION_ID:-} ]]; then
+  loginctl terminate-session "$XDG_SESSION_ID" 2>/dev/null
+fi

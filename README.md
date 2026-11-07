@@ -118,8 +118,9 @@ player, the artist and title, and a progress bar, or `● LIVE` for radio. The d
   - **Alt+P** play/pause · **Alt+N** next · **Alt+B** back · **Alt+X** stop. For radio, next and back hop between
     stations.
   - Typed: `play`, `next`, `prev`, `stop`, `vol +10`.
-- **Keeps playing:** background music continues when you leave the deck, and the rectangle picks it up again next
-  time. Settings (F8) can hide the rectangle. Radio and YouTube audio need `mpv` (`get mpv`).
+- **Stops with the deck:** quitting the deck stops its music. Leaving the NETDECK session (switching to Ubuntu or
+  logging out) closes everything the deck started: music, browser windows and background jobs. Settings (F8) can
+  hide the rectangle. Radio and YouTube audio need `mpv` (`get mpv`).
 
 ## nightdeck (the Raspberry Pi)
 

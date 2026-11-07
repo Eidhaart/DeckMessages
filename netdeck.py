@@ -4640,6 +4640,20 @@ class Deck:
             return
         self.running = False
 
+    def shutdown_procs(self):
+        """Leave nothing behind: stop the background music and close every program the deck launched."""
+        self.player.stop()
+        for p in self.children:
+            if p.poll() is None:
+                try:
+                    os.killpg(p.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    try:
+                        p.terminate()
+                    except OSError:
+                        pass
+        self.children = []
+
     def switch_bin(self):
         p = os.path.join(HOME, ".local", "bin", "netdeck-switch")
         return p if os.access(p, os.X_OK) else shutil.which("netdeck-switch")
@@ -4650,6 +4664,7 @@ class Deck:
             return self.err("session switching isn't installed - run ./install.sh --session in the netdeck folder")
         self.log("switching session - see you on the other side", "acc", tag="SESSION", tag_role="acc")
         save_conf(self.conf)
+        self.shutdown_procs()
         self.foreground([sw, target], pause=False, label=f"switch to {target}")
 
     def cmd_ubuntu(self, args, rest):
@@ -5274,6 +5289,11 @@ class Deck:
             self.scr.timeout(70)
         if self.job:
             self.kill_job()
+        if self.exit_code != 75:  # not a font relaunch: the deck takes its music with it
+            if self.kiosk:
+                self.shutdown_procs()  # logging out of the NETDECK session: close everything it launched
+            else:
+                self.player.stop()
         save_conf(self.conf)
         self.jack_out()
         return self.exit_code
