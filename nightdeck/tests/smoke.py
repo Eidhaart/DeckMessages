@@ -72,6 +72,9 @@ code, screens, raw = scenario(80, 24, "linux", "nightdeck_invalid.UTF-8", [
     ("x", 0.6), ("j", 0.3), ("q", 0.5), ("jjj", 0.2), ("\r", 1.0)])  # TERM=linux arrows differ
 check("linux console exits cleanly", code == 0 and "Traceback" not in raw)
 check("console glyphs on TERM=linux", "► 01" in screens[0] and "▶" not in screens[0])
+check("console palette repainted with theme", "\x1b]p1ff003c" in raw.lower() and "\x1b]p3ffee08" in raw.lower()
+      and "\x1b]P0" in raw)
+check("console palette restored on exit", raw.rstrip().endswith("\x1b]R") or "\x1b]R" in raw[-200:])
 
 # 3b. Plain C locale falls back to ASCII glyphs
 code, screens, raw = scenario(80, 24, "xterm-256color", "C", [("x", 0.6)] + QUIT)

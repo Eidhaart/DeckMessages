@@ -23,11 +23,17 @@ cd nightdeck
 ~/.local/bin/nightdeck
 ```
 
-Setup uses sudo for Debian packages only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano, the w3m text browser and mpv, then tries micro and yt-dlp. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves your login shell alone. It replaces the Nightdeck executable and the marked autostart block in your login profile (see below). To remove the executable, delete `~/.local/bin/nightdeck`.
+Setup uses sudo for Debian packages and the console autologin only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano, the w3m text browser and mpv, then tries micro and yt-dlp. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves your login shell alone. It replaces the Nightdeck executable and the marked autostart block in your login profile (see below). To remove the executable, delete `~/.local/bin/nightdeck`.
 
-## SSH autostart and jack out
+## Autostart and jack out
 
-`./setup.sh` makes Nightdeck open by itself when you log in over SSH. It adds a marked block to `~/.profile`, plus `~/.bash_profile`, `~/.bash_login` or `~/.zprofile` when you have them. Rerunning setup replaces the block, and `./setup.sh --skip-packages --no-autostart` removes it. The deck only starts for interactive SSH logins. `scp`, `ssh deck@nightdeck.local <command>` and logins on the Pi's own screen are untouched.
+**On the Pi's screen**, setup turns on automatic login for your user on the first console (tty1), and Nightdeck opens as soon as the Pi has booted. No keyboard login is needed. It adds a systemd drop-in, `/etc/systemd/system/getty@tty1.service.d/nightdeck-autologin.conf`, which takes effect after a reboot. Anyone with the Pi's keyboard is then logged in as you. To keep the normal login prompt on the screen, run `./setup.sh --skip-packages --no-console`; SSH autostart still works. On the screen, Nightdeck repaints the console's 8 colors with your theme, so you get the real Cyberdeck red, yellow and cyan. The original colors come back when you leave Nightdeck. **Log out** from the Jack out menu restarts the deck there.
+
+To get bigger text on a large monitor, run `sudo dpkg-reconfigure console-setup` and pick the Terminus font at a larger size. If the image is cut off at the edges, switch the monitor's picture size to "Just Scan", "1:1" or "Screen Fit".
+
+**Over SSH**,
+
+`./setup.sh` also makes Nightdeck open by itself when you log in over SSH. It adds a marked block to `~/.profile`, plus `~/.bash_profile`, `~/.bash_login` or `~/.zprofile` when you have them. Rerunning setup replaces the block, and `./setup.sh --skip-packages --no-autostart` removes it. The deck only starts for interactive SSH logins. `scp`, `ssh deck@nightdeck.local <command>` and logins on the Pi's own screen are untouched.
 
 **Jack out** (**0**, **Esc** on the dashboard, or `/exit`) opens a menu:
 

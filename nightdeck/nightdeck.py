@@ -430,7 +430,7 @@ class Deck:
             if curses.can_change_color():
                 indexes = list(range(16, 16 + len(palette)))
                 for index, color in zip(indexes, palette):
-                    rgb = [round(int(color[i:i+2], 16) * 1000 / 255) for i in (0, 2, 4)]
+                    rgb = [(int(color[i:i+2], 16) * 1000 + 254) // 255 for i in (0, 2, 4)]
                     curses.init_color(index, *rgb)
             head, sel, hint, vit, text, dim, background = indexes
         else:
@@ -438,6 +438,15 @@ class Deck:
             head, sel, hint, vit, text, dim, background = (
                 curses.COLOR_RED, curses.COLOR_YELLOW, curses.COLOR_CYAN, curses.COLOR_GREEN,
                 curses.COLOR_WHITE, curses.COLOR_RED, curses.COLOR_BLACK)
+            if curses.can_change_color():
+                # Linux console: repaint its 8 colors with the theme (restored when Nightdeck exits).
+                dim = curses.COLOR_MAGENTA
+                for index, color in zip((head, sel, hint, vit, text, dim, background), palette):
+                    try:
+                        curses.init_color(index, *[(int(color[i:i+2], 16) * 1000 + 254) // 255 for i in (0, 2, 4)])
+                    except curses.error:
+                        dim = curses.COLOR_RED
+                        break
         pairs = {HEAD: (head, background), SEL: (sel, background), HINT: (hint, background),
                  VIT: (vit, background), TEXT: (text, background), DIM: (dim, background),
                  BADGE: (background, head), SELBAR: (background, sel), KEYCAP: (background, hint)}
@@ -1123,7 +1132,12 @@ class Deck:
 
     def power(self):
         """Jack out: power off, reboot or leave. Returns an exit code to leave Nightdeck."""
-        choices = ["Power off the deck", "Reboot", "Exit to shell", "Disconnect", "Cancel"]
+        try:
+            console = os.ttyname(0) == "/dev/tty1"
+        except OSError:
+            console = False
+        choices = ["Power off the deck", "Reboot", "Exit to shell",
+                   "Log out (the deck restarts)" if console else "Disconnect", "Cancel"]
         intro = ["Power off shuts the Pi down. Wait for the green activity LED to stop "
                  "before you unplug it."]
         if os.environ.get("SSH_CONNECTION"):
