@@ -23,7 +23,7 @@ cd nightdeck
 ~/.local/bin/nightdeck
 ```
 
-Setup uses sudo for Debian packages only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano, the w3m text browser and mpv, then tries micro and yt-dlp. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves the login shell and startup files alone. It replaces only the Nightdeck executable. To remove the executable, delete `~/.local/bin/nightdeck`.
+Setup uses sudo for Debian packages only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano, the w3m text browser and mpv, then tries micro and yt-dlp. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves your login shell alone. It replaces the Nightdeck executable and the marked autostart block in your login profile (see below). To remove the executable, delete `~/.local/bin/nightdeck`.
 
 ## SSH autostart and jack out
 
