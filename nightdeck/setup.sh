@@ -16,9 +16,12 @@ for arg in "$@"; do
 done
 if [ "$packages" -eq 1 ]; then
     sudo apt-get update
-    sudo apt-get install --no-install-recommends python3 git openssh-client ca-certificates zsh nano w3m
+    sudo apt-get install --no-install-recommends python3 git openssh-client ca-certificates zsh nano w3m mpv
     if ! command -v micro >/dev/null; then
         sudo apt-get install --no-install-recommends micro || printf '%s\n' 'Using nano.'
+    fi
+    if ! command -v yt-dlp >/dev/null; then
+        sudo apt-get install --no-install-recommends yt-dlp || printf '%s\n' 'Skipping yt-dlp: URL streams from video sites unavailable.'
     fi
 fi
 install -d "$HOME/.local/bin"

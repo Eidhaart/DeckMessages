@@ -95,5 +95,34 @@ check("0 opens jack out menu", "Power off the deck" in screens[1] and "Exit to s
 check("claude code module", "CLAUDE CODE" in screens[3] and "Set remote host and project" in screens[3])
 check("exit to shell returns code 10", code == 10)
 
+# 6. Video player builds the right mpv command for the deck screen and for streams
+import os
+with tempfile.TemporaryDirectory() as home:
+    fake = Path(home, "bin")
+    fake.mkdir()
+    (fake / "mpv").write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$HOME/mpv.args"\n')
+    (fake / "mpv").chmod(0o755)
+    Path(home, "Videos").mkdir()
+    Path(home, "Videos", "clip.mp4").write_bytes(b"x")
+    env = {"PATH": f"{fake}:{os.environ['PATH']}", "DISPLAY": "", "WAYLAND_DISPLAY": ""}
+    s = Session(80, 24, home=home, env=env)
+    s.pump(0.6)
+    for key, wait in [("x", 0.6), ("6", 0.6), ("\r", 0.6), (DOWN * 2, 0.2), ("\r", 1.0)]:
+        s.send(key, wait)
+    played = Path(home, "mpv.args").read_text().splitlines() if Path(home, "mpv.args").exists() else []
+    check("video plays on deck screen via DRM", "--vo=gpu,drm" in played and "--fs" in played
+          and played[-2:] == ["--", str(Path(home, "Videos", "clip.mp4"))])
+    Path(home, "mpv.args").unlink(missing_ok=True)
+    for key, wait in [("\x1b", 0.4), (DOWN * 2, 0.2), ("\r", 0.5), ("https://example.com/v?id=1", 0.2),
+                      ("\r", 1.0), ("\r", 0.5), ("ftp://x/y", 0.2), ("\r", 0.6)]:
+        s.send(key, wait)
+    played = Path(home, "mpv.args").read_text().splitlines() if Path(home, "mpv.args").exists() else []
+    check("URL stream capped for the Pi", played[-1:] == ["https://example.com/v?id=1"]
+          and any(a.startswith("--ytdl-format=") and "480" in a for a in played))
+    check("non-http URL refused", "Use a plain http(s) URL" in s.text())
+    for key, wait in [("\r", 0.3), ("\x1b", 0.4)] + QUIT:
+        s.send(key, wait)
+    check("video module exits cleanly", s.finish() == 0)
+
 print("\n" + ("ALL PASSED" if not failures else f"{len(failures)} FAILED"))
 sys.exit(1 if failures else 0)

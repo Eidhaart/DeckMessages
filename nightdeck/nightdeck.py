@@ -50,6 +50,13 @@ EXIT_SHELL = 10  # tells the login autostart to keep the shell open
 HOST = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@:%-]*")
 REMOTE_DIR = re.compile(r"[A-Za-z0-9_./~-]{0,200}")
 CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash"
+VIDEOS = HOME / "Videos"
+MEDIA_EXT = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".ts", ".ogv", ".flv",
+             ".wmv", ".3gp", ".mp3", ".flac", ".ogg", ".oga", ".opus", ".wav", ".m4a", ".aac"}
+VIDEO_OUTPUTS = ("ask", "screen", "terminal")
+# 480p H.264 fits the 800x480 panel and is what the Pi 3B can decode in hardware.
+YTDL_FORMAT = "bestvideo[height<=?480][vcodec^=avc1]+bestaudio/best[height<=?480]/best"
+MPV_KEYS = "space pause  //  left/right seek  //  9/0 volume  //  m mute  //  q stop"
 
 # Color pairs
 HEAD, SEL, HINT, VIT, TEXT, DIM, BADGE, SELBAR, KEYCAP = range(1, 10)
@@ -192,7 +199,8 @@ def repo_url(value):
 
 def load_settings():
     defaults = {"theme": "Cyberdeck", "custom": list(THEMES["Cyberdeck"]),
-                "fx": True, "boot": True, "glyphs": "auto", "claude_host": "", "claude_dir": ""}
+                "fx": True, "boot": True, "glyphs": "auto", "claude_host": "", "claude_dir": "",
+                "video_out": "ask"}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -207,6 +215,8 @@ def load_settings():
         isinstance(value, str) and COLOR.fullmatch(value) for value in custom
     ):
         defaults["custom"] = custom
+    if saved.get("video_out") in VIDEO_OUTPUTS:
+        defaults["video_out"] = saved["video_out"]
     if isinstance(saved.get("claude_host"), str) and HOST.fullmatch(saved["claude_host"]):
         defaults["claude_host"] = saved["claude_host"]
     if isinstance(saved.get("claude_dir"), str) and REMOTE_DIR.fullmatch(saved["claude_dir"]):
@@ -347,6 +357,13 @@ def rate(value):
         if value < 1000 or unit == "G":
             return f"{value:.0f}{unit}/s" if unit == "B" else f"{value:.1f}{unit}/s"
         value /= 1024
+
+
+def size_label(count):
+    for unit in ("B", "KB", "MB", "GB"):
+        if count < 1000 or unit == "GB":
+            return f"{count:.0f} {unit}" if unit == "B" else f"{count:.1f} {unit}"
+        count /= 1000
 
 
 def nearest_terminal_color(color):
@@ -1059,10 +1076,11 @@ class Deck:
             ("notes", "Notes", self.notes),
             ("zsh", "Zsh shell", self.zsh),
             ("claude", "Claude Code", self.claude),
-            ("vitals", "System vitals", self.system),
+            ("video", "Video player", self.video),
             ("ssh", "SSH utilities", self.ssh),
             ("news", "News wire", self.news),
             ("settings", "Settings", self.settings),
+            ("vitals", "System vitals", self.system),
             ("sheets", "Character sheets", lambda: self.view(
                 "CHARACTER SHEETS", "Reserved.\n\nSlot allocated for a future module.")),
             ("exit", "Jack out", self.power),
@@ -1347,6 +1365,138 @@ class Deck:
             lines.append(f"Wi-Fi     {signal}%")
         self.view("SYSTEM // local telemetry", "\n".join(lines))
 
+    def video(self):
+        """Play local files or streams with mpv on the deck's screen or in this terminal."""
+        selected = 0
+        while True:
+            mpv = shutil.which("mpv")
+            intro = ["mpv ready." if mpv else "mpv is not installed.",
+                     "Streams from YouTube and similar sites: " +
+                     ("yt-dlp ready." if shutil.which("yt-dlp") else "install yt-dlp."),
+                     "Keys while playing: " + MPV_KEYS]
+            options = [] if mpv else [("Install mpv and yt-dlp", self.video_install)]
+            options += [
+                ("Browse ~/Videos", lambda: self.video_pick(VIDEOS)),
+                ("Play file by path", self.video_path),
+                ("Play a URL or stream", self.video_url),
+                ("Output / " + self.preferences["video_out"].capitalize(), self.video_output_cycle),
+            ]
+            choice = self.menu("VIDEO // " + ("mpv" if mpv else "player offline"),
+                               [label for label, _ in options], intro=intro, selected=selected)
+            if choice is None:
+                return
+            selected = choice
+            options[choice][1]()
+
+    def video_install(self):
+        args = ["sudo", "apt-get", "install", "--no-install-recommends", "mpv", "yt-dlp"]
+        if self.confirm("VIDEO // install player", args):
+            self.run(args)
+
+    def video_output_cycle(self):
+        settings = dict(self.preferences)
+        settings["video_out"] = VIDEO_OUTPUTS[(VIDEO_OUTPUTS.index(settings["video_out"]) + 1)
+                                              % len(VIDEO_OUTPUTS)]
+        save_settings(settings)
+        self.preferences = settings
+
+    def video_pick(self, root):
+        VIDEOS.mkdir(exist_ok=True)
+        current = root
+        selected = 0
+        while True:
+            try:
+                entries = list(current.iterdir())
+            except OSError:
+                self.notice("VIDEO", "That folder can't be read.", ok=False)
+                return
+            dirs = sorted((p for p in entries if p.is_dir() and not p.is_symlink()
+                           and not p.name.startswith(".")), key=lambda p: p.name.lower())
+            files = sorted((p for p in entries if p.is_file() and not p.is_symlink()
+                            and p.suffix.lower() in MEDIA_EXT), key=lambda p: p.name.lower())
+            labels = ["Parent directory"]
+            if files:
+                labels.append(f"Play all here ({len(files)})")
+            labels += [p.name + "/" for p in dirs]
+            for p in files:
+                try:
+                    labels.append(f"{p.name}  [{size_label(p.stat().st_size)}]")
+                except OSError:
+                    labels.append(p.name)
+            where = "~/" + str(current.relative_to(HOME)) if current.is_relative_to(HOME) else str(current)
+            intro = None if files or dirs else [
+                "No videos here yet. Copy some from Ubuntu with:",
+                f"$ scp movie.mp4 {self.user}@{self.host}.local:~/Videos/"]
+            choice = self.menu("VIDEO // " + where, labels, intro=intro, selected=selected)
+            if choice is None:
+                return
+            selected = choice
+            if choice == 0:
+                if current == root:
+                    return
+                current, selected = current.parent, 0
+                continue
+            index = choice - (2 if files else 1)
+            if index == -1:
+                self.play(files)
+            elif index < len(dirs):
+                current, selected = dirs[index], 0
+            else:
+                self.play([files[index - len(dirs)]])
+
+    def video_path(self):
+        value = self.ask("VIDEO // file path, e.g. ~/Videos/clip.mp4", prefix="")
+        if not value:
+            return
+        path = Path(value.strip()).expanduser()
+        if not path.is_file():
+            self.notice("VIDEO", "No file at that path.", ok=False)
+            return
+        self.play([path.resolve()])
+
+    def video_url(self):
+        value = self.ask("VIDEO // https URL of a video or stream", prefix="")
+        if not value:
+            return
+        value = value.strip()
+        if not public_url(value, ("https", "http"), allow_query=True):
+            self.notice("VIDEO", "Use a plain http(s) URL without a login in it.", ok=False)
+            return
+        self.play([value])
+
+    def video_output(self):
+        """screen or terminal, or None when cancelled."""
+        mode = self.preferences["video_out"]
+        if mode != "ask":
+            return mode
+        if not os.environ.get("SSH_CONNECTION"):
+            return "screen"
+        choice = self.menu("VIDEO // play where?", ["Deck screen", "This terminal (text mode)"], intro=[
+            "Deck screen plays full screen on the Pi's display. Use this SSH window as the remote.",
+            "Text mode draws the video in this terminal with colored blocks. Sound comes out of the Pi.",
+            "Set a fixed choice in Settings / Video output."])
+        return None if choice is None else ("screen", "terminal")[choice]
+
+    def play(self, targets):
+        mpv = shutil.which("mpv")
+        if not mpv:
+            self.notice("VIDEO", "Install mpv first: choose Install mpv and yt-dlp.", ok=False)
+            return
+        output = self.video_output()
+        if output is None:
+            return
+        args = [mpv, "--save-position-on-quit", "--ytdl-format=" + YTDL_FORMAT]
+        if output == "screen":
+            args += ["--fs", "--hwdec=auto-safe", "--profile=fast"]
+            if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+                args.append("--vo=gpu,drm")  # draw straight on the display, no desktop needed
+        else:
+            args += ["--vo=tct", "--hwdec=auto-copy-safe", "--framedrop=decoder+vo", "--really-quiet"]
+            if self.basic:
+                args.append("--vo-tct-256=yes")
+        args += ["--", *map(str, targets)]
+        self.run(args, pause=False)
+
     def claude(self):
         """Claude Code: run it here on 64-bit hardware, or on a bigger machine over SSH."""
         machine = os.uname().machine
@@ -1480,6 +1630,7 @@ class Deck:
                 "Effects / " + ("On" if p["fx"] else "Off"),
                 "Boot sequence / " + ("On" if p["boot"] else "Off"),
                 "Glyphs / " + p["glyphs"].capitalize(),
+                "Video output / " + p["video_out"].capitalize(),
                 "Connect to Wi-Fi",
             ], intro=[swatch], selected=selected)
             if choice is None:
@@ -1513,6 +1664,9 @@ class Deck:
                 settings["boot"] = not p["boot"]
             elif choice == 4:
                 settings["glyphs"] = GLYPH_MODES[(GLYPH_MODES.index(p["glyphs"]) + 1) % len(GLYPH_MODES)]
+            elif choice == 5:
+                settings["video_out"] = VIDEO_OUTPUTS[(VIDEO_OUTPUTS.index(p["video_out"]) + 1)
+                                                      % len(VIDEO_OUTPUTS)]
             else:
                 self.wifi()
                 continue
