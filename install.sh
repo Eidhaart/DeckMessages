@@ -52,7 +52,7 @@ remove_terminal_autostart() {
 }
 
 if (( UNINSTALL )); then
-  rm -f "$BIN" "$SESSION_BIN" "$SWITCH_BIN" "$DESKTOP" "$JACK_LAUNCHER" "$RESTORE_AUTOSTART"
+  rm -f "$BIN" "$SESSION_BIN" "$SWITCH_BIN" "$BIN_DIR/netdeck-nightdeck" "$DESKTOP" "$JACK_LAUNCHER" "$RESTORE_AUTOSTART"
   if [[ -f "$AUTOSTART" ]]; then rm -f "$AUTOSTART"; say "login autostart removed"; fi
   if [[ -e "$SESSION_FILE" || -e "$KIOSK_BIN" || -e "$SWITCH_ROOT" || -e "$SUDOERS" ]]; then
     say "removing the NETDECK//OS login session and session switcher (sudo)"
@@ -71,6 +71,7 @@ mkdir -p "$BIN_DIR" "$APP_DIR"
 install -m 0755 "$HERE/netdeck.py" "$BIN"
 install -m 0755 "$HERE/netdeck-session.sh" "$SESSION_BIN"
 install -m 0755 "$HERE/netdeck-switch.sh" "$SWITCH_BIN"
+install -m 0755 "$HERE/netdeck-nightdeck.sh" "$BIN_DIR/netdeck-nightdeck"
 say "installed ${cyan}$BIN${rst}"
 
 if (( ! SESSION )); then

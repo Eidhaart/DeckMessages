@@ -3,6 +3,7 @@
 #   jackin             play the jack-in sequence, then open the deck in this terminal
 #   jackin --session   ...then log straight into the NETDECK session instead (netdeck-switch)
 #   jackin --quick     skip the sequence
+#   nightdeck [cmd]    jack into the nightdeck Raspberry Pi (ssh deck@nightdeck.local) with its own sequence
 #
 # Any key skips the sequence; Ctrl+C aborts and leaves you in the shell.
 # Installed into $ZSH_CUSTOM by zsh/install-zsh.sh (oh-my-zsh loads it automatically).
@@ -156,3 +157,14 @@ jackin() {
     "$deck" --no-boot
   fi
 }
+
+# nightdeck: jack into the Raspberry Pi. The sequence and real probes live in netdeck-nightdeck.
+nightdeck() {
+  local nd=${commands[netdeck-nightdeck]:-$HOME/.local/bin/netdeck-nightdeck}
+  if [[ ! -x $nd ]]; then
+    print -P "%F{${ND[bad]:-red}}✗ netdeck-nightdeck isn't installed%f - run ./install.sh in the netdeck folder"
+    return 1
+  fi
+  "$nd" "$@"
+}
+compdef _ssh nightdeck 2>/dev/null

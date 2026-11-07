@@ -74,6 +74,38 @@ fetch is cached, so headlines appear instantly at boot and work offline.
 Change the sources with `news sources`, `news add <rss url> [se|world] [name]`, `news rm <n>` and `news reset`.
 Settings (F8) turns live news off. If you've customized your layout, add the panel with `panel news on`.
 
+## Streaming and YouTube
+
+| Command | What it does |
+|---|---|
+| `netflix` · `prime` · `disney` · `svtplay` | opens the service in a fullscreen browser app window |
+| `stream` | opens the **STREAM // MEDIA** menu (also in the arsenal, F2) |
+| `yt <search>` | YouTube inside the deck: search, then **Enter** plays in a window, **a** plays audio only with terminal controls, **t** plays the video in the terminal itself, **o** opens it in the browser |
+
+- **Browser:** Netflix, Prime and Disney+ are web-only on Linux. Chrome, Chromium and Brave include the DRM they need,
+  so the deck uses one of those if installed. Firefox works too after you allow DRM when it asks. In the NETDECK
+  session the window covers the deck; close it (Ctrl+W) to return.
+- **YouTube** needs `yt-dlp` and `mpv`. Press **i** in the YouTube screen to install whichever is missing. A fresh
+  `yt-dlp` comes from pipx, because older apt versions stop working with YouTube.
+- **In-terminal playback (t)** uses real images in kitty and foot (sixel), and colored blocks elsewhere.
+- **Pin** any of them to the dock: `pin netflix`, `pin yt`.
+
+## nightdeck (the Raspberry Pi)
+
+```bash
+nightdeck            # from zsh, or type it in the deck
+```
+
+This plays a jack-in sequence while it really probes the Pi: it looks up `nightdeck.local` on your network,
+measures latency, checks the SSH port and shows the Pi's host-key fingerprint (KNOWN, or NEW on first contact). Then
+it runs `ssh deck@nightdeck.local`. When you leave, it prints the session length. If the Pi isn't answering, it says
+so instead of hanging.
+
+`nightdeck htop` runs a command on the Pi, `nightdeck --quick` skips the show, and any key skips it mid-way.
+`nightdeck --force` connects even if the probes fail. To use a different host, user or port, put
+`NIGHTDECK_HOST=...`, `NIGHTDECK_USER=...` or `NIGHTDECK_PORT=...` in `~/.config/netdeck/session.conf`.
+For login without a password: `ssh-copy-id deck@nightdeck.local` (once).
+
 ## Cyberpunk zsh (oh-my-zsh)
 
 `zsh/` styles your everyday terminal to match the deck: oh-my-zsh, a two-line HUD prompt, and themed syntax

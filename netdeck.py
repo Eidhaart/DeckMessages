@@ -307,7 +307,8 @@ TUI_CATALOG = [
         T("mpv", "mpv: plays anything", "apt:mpv", name="mpv"),
         T("cava", "cava: audio spectrum visualizer", "apt:cava", name="cava"),
         T("ncmpcpp", "ncmpcpp: MPD music client", "apt:ncmpcpp", name="ncmpcpp"),
-        T("yt-dlp", "yt-dlp: download video / audio", "apt:yt-dlp", name="yt-dlp", cli=True),
+        T("yt-dlp", "yt-dlp: YouTube search + downloads (needed for the YouTube module)", "pipx:yt-dlp apt:yt-dlp",
+          name="yt-dlp", cli=True),
     ]),
     ("DATA // DEV TOOLS", "databases, APIs, spreadsheets, REPLs", [
         T("harlequin", "Harlequin: SQL IDE in the terminal", "pipx:harlequin", name="Harlequin"),
@@ -901,6 +902,50 @@ def cpu_model():
 #  Live news (RSS / Atom). Swedish and world feeds by default; edit with `news add` / config "feeds".
 # --------------------------------------------------------------------------------------------
 
+STREAMS = [  # name, url, command, description
+    ("Netflix", "https://www.netflix.com/browse", "netflix", "films & series  //  browser app window"),
+    ("Prime Video", "https://www.primevideo.com", "prime", "Amazon Prime Video  //  browser app window"),
+    ("Disney+", "https://www.disneyplus.com", "disney", "Disney, Marvel, Star Wars  //  browser app window"),
+    ("SVT Play", "https://www.svtplay.se", "svtplay", "Swedish public TV, free  //  browser app window"),
+    ("YouTube", "yt", "youtube", "search + play inside the deck (yt-dlp + mpv)"),
+]
+
+
+def web_app_argv(url):
+    """A browser window for a streaming site. Chrome-family browsers ship the DRM Netflix & co need."""
+    for b in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser",
+              "microsoft-edge", "vivaldi"):
+        if shutil.which(b):
+            return [b, f"--app={url}", "--start-fullscreen", "--ozone-platform-hint=auto"]
+    if shutil.which("firefox"):
+        return ["firefox", "--new-window", url]
+    opener = shutil.which("xdg-open")
+    return [opener, url] if opener else None
+
+
+def clean_title(s):
+    """Drop emoji/pictographs (they break terminal column math) but keep CJK and accents."""
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if o > 0xFFFF or 0x2600 <= o <= 0x27BF or 0xFE00 <= o <= 0xFE0F or o == 0x200D:
+            continue
+        out.append(ch)
+    return re.sub(r"\s+", " ", "".join(out)).strip()
+
+
+def fit(s, width):
+    """Cut a string to a display width (CJK counts double)."""
+    out, w = [], 0
+    for ch in s:
+        cw = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+        if w + cw > width:
+            break
+        out.append(ch)
+        w += cw
+    return "".join(out)
+
+
 DEFAULT_FEEDS = [
     {"name": "SVT", "region": "se", "url": "https://www.svt.se/rss.xml"},
     {"name": "Ekot", "region": "se", "url": "https://api.sr.se/api/rss/program/83"},
@@ -1238,6 +1283,15 @@ class Catalog:
         for title, desc, _ in APP_CATS + [("UNSORTED", "uncategorized programs", set())]:
             if buckets[title]:
                 cats.append((title, desc, sorted(buckets[title], key=lambda a: a.name.lower())))
+        stream_apps = []
+        for name, url, key, desc in STREAMS:
+            if url == "yt":
+                stream_apps.append(App(name, "yt", ["yt"], desc, key=key))
+            else:
+                argv = web_app_argv(url)
+                if argv:
+                    stream_apps.append(App(name, "gui", argv, desc, key=key))
+        cats.append(("STREAM // MEDIA", "streaming services + YouTube", stream_apps))
         market, descs = [], {}
         for title, desc, entries in TUI_CATALOG:
             apps = []
@@ -1408,6 +1462,13 @@ COMMANDS = [
     ("glitch", "", "shake the signal", []),
     ("news", "[se|world|refresh|sources|add|rm]", "live Swedish + world headlines, read articles in the deck (F6)",
      ["nyheter", "headlines"]),
+    ("stream", "[netflix|prime|disney|svtplay]", "streaming services (opens the STREAM menu)", ["tv", "media"]),
+    ("netflix", "", "open Netflix", []),
+    ("prime", "", "open Prime Video", ["primevideo"]),
+    ("disney", "", "open Disney+", ["disneyplus", "disney+"]),
+    ("svtplay", "", "open SVT Play", []),
+    ("yt", "[search]", "YouTube: search and play videos in the deck", ["youtube"]),
+    ("nightdeck", "[command]", "jack into the nightdeck Raspberry Pi over SSH", ["pi", "jackpi"]),
     ("rain", "", "data rain screensaver", ["screensaver"]),
     ("memo", "<text>", "write a data shard to the vault", ["note", "shard"]),
     ("shards", "[n]", "read the latest data shards", ["notes"]),
@@ -1435,7 +1496,7 @@ PANEL_HOME = {"sys": "left", "mem": "left", "disk": "left", "net": "left", "bio"
 JP_LABELS = {
     "SYSCORE": "演算", "MEMORY": "記憶", "STORAGE": "保存", "NET UPLINK": "接続", "VITALS": "生体",
     "PROCESSES": "処理", "DOCK": "装備", "CONSOLE": "端末", "NEURAL LINK": "神経", "DATASTREAM": "データ",
-    "PREVIEW": "外観", "NEWSFEED": "報道", "NEWS // NYHETER": "報道", "ARSENAL // INSTALLED PROGRAMS": "兵器庫", "PROCESS MANAGER": "処理",
+    "PREVIEW": "外観", "NEWSFEED": "報道", "NEWS // NYHETER": "報道", "YOUTUBE // SIGNAL SEARCH": "映像", "ARSENAL // INSTALLED PROGRAMS": "兵器庫", "PROCESS MANAGER": "処理",
     "CODEX // COMMAND REFERENCE": "案内", "TUNE // CUSTOMIZE THE DECK": "外観", "CONFIRM": "確認",
 }
 
@@ -1769,6 +1830,8 @@ class Deck:
             self.draw_settings()
         elif self.mode == "news":
             self.draw_news_overlay()
+        elif self.mode == "yt":
+            self.draw_yt()
         self.draw_toasts()
         if self.confirm:
             self.draw_confirm()
@@ -2438,8 +2501,8 @@ class Deck:
             idx = top + i
             rr = alist_top + i
             sel = idx == ov["sel"] and ov.get("focus") == "apps"
-            kind = {"gui": "GUI", "tui": "TUI", "bin": "BIN", "get": "GET"}[a.kind]
-            krole = {"gui": "acc", "tui": "hi", "bin": "dim", "get": "mag"}[a.kind]
+            kind = {"gui": "GUI", "tui": "TUI", "bin": "BIN", "get": "GET", "yt": "YT"}[a.kind]
+            krole = {"gui": "acc", "tui": "hi", "bin": "dim", "get": "mag", "yt": "bad"}[a.kind]
             if sel:
                 self.put(rr, ax - 1, " " * (aw + 1), self.inv("acc"))
                 self.put(rr, ax, f"▶ {a.name[:nw - 2]:<{nw - 2}}", self.inv("acc"))
@@ -2461,6 +2524,7 @@ class Deck:
         if apps:
             a = apps[ov["sel"]]
             how = {"gui": "detached GUI", "tui": "takes the terminal", "bin": "output streams to console",
+                   "yt": "search + play in the deck",
                    "get": "not installed · ENTER / i to install"}[a.kind]
             self.put(r, x + 2, "EXEC ▸ " if a.kind != "get" else "GET  ▸ ", self.c("dim", r))
             cmd = " ".join(a.argv) if a.kind != "get" else install_summary(a.inst)
@@ -3205,6 +3269,236 @@ class Deck:
             self.open_link(items[max(0, min(ov.get("sel", 0), len(items) - 1))].get("link"))
 
 
+    # -- streaming + YouTube
+    def stream_open(self, key):
+        svc = next((s for s in STREAMS if s[2] == key), None)
+        if not svc:
+            return self.err("unknown service")
+        name, url, _k, _desc = svc
+        if url == "yt":
+            return self.cmd_yt([], "")
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return self.err(f"{name} needs a screen for its browser window - no display found")
+        argv = web_app_argv(url)
+        if not argv:
+            return self.err("no browser found - install Chrome, Chromium, Brave or Firefox (get firefox)")
+        self.spawn(argv, name)
+        self.toast(f"STREAM // {name.upper()}", "opening in " + os.path.basename(argv[0]) + "  //  close it to return",
+                   "acc", 5)
+
+    def cmd_stream(self, args, rest):
+        if args:
+            return self.stream_open(args[0].lower().replace("+", "").replace("plus", ""))
+        self.cmd_apps([], "")
+        for i, (title, _d, _a) in enumerate(self.apps_view()):
+            if title.startswith("STREAM"):
+                self.ov.update(cat=i, focus="apps")
+                break
+
+    def cmd_netflix(self, args, rest):
+        self.stream_open("netflix")
+
+    def cmd_prime(self, args, rest):
+        self.stream_open("prime")
+
+    def cmd_disney(self, args, rest):
+        self.stream_open("disney")
+
+    def cmd_svtplay(self, args, rest):
+        self.stream_open("svtplay")
+
+    def cmd_yt(self, args, rest):
+        self.mode = "yt"
+        if not isinstance(self.ov, dict) or self.ov.get("_yt") is None:
+            self.ov = {"_yt": True, "query": "", "typing": True, "results": [], "sel": 0, "top": 0}
+        else:
+            self.ov = dict(self.ov)
+        if rest:
+            self.yt_search(rest)
+
+    def yt_tools(self):
+        return shutil.which("yt-dlp"), shutil.which("mpv")
+
+    def yt_search(self, q):
+        ov = self.ov
+        ov.update(query=q, typing=False, busy=True, error=None, results=[], sel=0, top=0)
+        ytdlp, _mpv = self.yt_tools()
+        if not ytdlp:
+            ov.update(busy=False, error="needs yt-dlp - press i to install it")
+            return
+
+        def run():
+            try:
+                r = subprocess.run([ytdlp, "--flat-playlist", "--dump-single-json", "--no-warnings",
+                                    f"ytsearch30:{q}"], capture_output=True, text=True, timeout=45)
+                data = json.loads(r.stdout or "{}")
+                res = []
+                for e in data.get("entries") or []:
+                    if not e or not e.get("id"):
+                        continue
+                    res.append(dict(id=e["id"], title=clean_title(e.get("title") or "?"),
+                                    channel=clean_title(e.get("channel") or e.get("uploader") or ""),
+                                    duration=e.get("duration") or 0, views=e.get("view_count") or 0,
+                                    url=e.get("url") or f"https://www.youtube.com/watch?v={e['id']}"))
+                ov["results"] = res
+                if not res:
+                    ov["error"] = "no results" if r.returncode == 0 else \
+                        "search failed - yt-dlp may be outdated (get yt-dlp installs a fresh one)"
+            except (subprocess.SubprocessError, ValueError, OSError) as e:
+                ov["error"] = f"search failed ({type(e).__name__})"
+            finally:
+                ov["busy"] = False
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @staticmethod
+    def fmt_len(sec):
+        sec = int(sec or 0)
+        if not sec:
+            return "LIVE"
+        h, rem = divmod(sec, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h}:{m:02d}:{s:02d}" if h else f"{m:2d}:{s:02d}"
+
+    @staticmethod
+    def fmt_views(n):
+        n = int(n or 0)
+        for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+            if n >= div:
+                return f"{n / div:.1f}{suf}"
+        return str(n)
+
+    def draw_yt(self):
+        ov = self.ov
+        y, x, h, w = self.box("YOUTUBE // SIGNAL SEARCH",
+                              "/ search  ENTER play  a audio  t in terminal  o browser  ESC close", role="bad")
+        r = y + 1
+        caret = "█" if ov.get("typing") and int(self.now * 2.2) % 2 == 0 else " "
+        self.put(r, x + 3, "SEARCH ▸ ", self.c("dim", r))
+        q = ov.get("query", "")
+        if ov.get("typing") or q:
+            self.put(r, x + 12, (q + caret)[: w - 40], self.c("hi", r, True))
+        else:
+            self.put(r, x + 12, "press / and type what you're looking for", self.c("deep", r))
+        ytdlp, mpv = self.yt_tools()
+        tools = ("yt-dlp ✓" if ytdlp else "yt-dlp ✗") + "  " + ("mpv ✓" if mpv else "mpv ✗")
+        self.put(r, x + w - len(tools) - 3, tools, self.c("ok" if ytdlp and mpv else "warn", r))
+        self.put(r + 1, x + 1, "─" * (w - 2), self.c("line", r + 1))
+        top_y = y + 3
+        list_h = h - 5
+        if ov.get("busy"):
+            dots = "." * (int(self.now * 4) % 4)
+            self.put(top_y + 1, x + 4, f"scanning the grid for '{q}'{dots}", self.c("acc", top_y + 1, True))
+            return
+        if ov.get("error"):
+            self.put(top_y + 1, x + 4, "✗ " + ov["error"], self.c("bad", top_y + 1, True))
+        missing = [n for n, p in (("yt-dlp", ytdlp), ("mpv", mpv)) if not p]
+        if missing and not ov.get("results"):
+            self.put(top_y + 3, x + 4, f"playback needs {' + '.join(missing)}  -  press i to install", self.c("warn", top_y + 3))
+        res = ov.get("results") or []
+        if not res:
+            return
+        ov["sel"] = max(0, min(ov.get("sel", 0), len(res) - 1))
+        top = ov.get("top", 0)
+        if ov["sel"] < top:
+            top = ov["sel"]
+        if ov["sel"] >= top + list_h:
+            top = ov["sel"] - list_h + 1
+        ov["top"] = top
+        chw = min(22, max(10, w // 6))
+        for k, e in enumerate(res[top:top + list_h]):
+            rr = top_y + k
+            sel = top + k == ov["sel"]
+            ln = self.fmt_len(e["duration"])
+            views = self.fmt_views(e["views"])
+            tw = w - 8 - 10 - chw - 9
+            title = fit(e["title"], tw)
+            if sel:
+                self.put(rr, x + 2, " " * (w - 6), self.inv("bad"))
+                self.put(rr, x + 2, f"▶ {ln:>8}  ", self.inv("bad"))
+                self.put(rr, x + 14, fit(e["channel"], chw - 1), self.inv("bad"))
+                self.put(rr, x + 14 + chw, title, self.inv("bad"))
+                self.put(rr, x + w - 4 - len(views), views, self.inv("bad"))
+            else:
+                self.put(rr, x + 4, f"{ln:>8}", self.c("dim", rr))
+                self.put(rr, x + 14, fit(e["channel"], chw - 1), self.c("acc", rr))
+                self.put(rr, x + 14 + chw, title, self.c("txt", rr))
+                self.put(rr, x + w - 4 - len(views), views, self.c("dim", rr))
+
+    def yt_play(self, e, how):
+        ytdlp, mpv = self.yt_tools()
+        if not mpv:
+            return self.err("needs mpv to play - press i in the YouTube screen, or: get mpv")
+        url = e["url"]
+        fmt = "--ytdl-format=bestvideo[height<=?1080]+bestaudio/best"
+        display = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+        if how == "video" and display:
+            self.spawn([mpv, "--force-window=immediate", fmt, f"--title=NETDECK // {e['title']}", url], e["title"][:40])
+            self.toast("NOW PLAYING", fit(e["title"], 46), "bad", 5)
+        elif how == "audio":
+            self.foreground([mpv, "--no-video", "--term-osd-bar", url], pause=False, label=f"♪ {e['title'][:50]}")
+        else:
+            term = os.environ.get("TERM", "")
+            vo = "kitty" if "kitty" in term else ("sixel" if term.startswith("foot") else "tct")
+            self.foreground([mpv, f"--vo={vo}", "--really-quiet", fmt.replace("1080", "480"), url], pause=False,
+                            label=f"▶ {e['title'][:50]}")
+
+    def yt_key(self, k):
+        ov = self.ov
+        if ov.get("typing"):
+            if k == "\x1b":
+                ov["typing"] = False
+            elif k in ("\n", "\r", curses.KEY_ENTER):
+                if ov.get("query", "").strip():
+                    self.yt_search(ov["query"].strip())
+                else:
+                    ov["typing"] = False
+            elif k in (curses.KEY_BACKSPACE, "\x7f", "\x08"):
+                ov["query"] = ov.get("query", "")[:-1]
+            elif k == "\x15":
+                ov["query"] = ""
+            elif isinstance(k, str) and k.isprintable():
+                ov["query"] = ov.get("query", "") + k
+            return
+        res = ov.get("results") or []
+        cur = res[max(0, min(ov.get("sel", 0), len(res) - 1))] if res else None
+        if k in ("\x1b", "q"):
+            self.mode = "main"
+        elif k == "/":
+            ov["typing"] = True
+            ov["query"] = ""
+        elif k in (curses.KEY_DOWN, "j"):
+            ov["sel"] = ov.get("sel", 0) + 1
+        elif k in (curses.KEY_UP, "k"):
+            ov["sel"] = max(0, ov.get("sel", 0) - 1)
+        elif k == curses.KEY_NPAGE:
+            ov["sel"] = ov.get("sel", 0) + self.H // 2
+        elif k == curses.KEY_PPAGE:
+            ov["sel"] = max(0, ov.get("sel", 0) - self.H // 2)
+        elif k == "i":
+            ytdlp, mpv = self.yt_tools()
+            want = "yt-dlp" if not ytdlp else ("mpv" if not mpv else None)
+            app = self.market_find(want) if want and self.catalog.ready else None
+            if app:
+                self.install_app(app)
+        elif cur and k in ("\n", "\r", curses.KEY_ENTER):
+            self.yt_play(cur, "video")
+        elif cur and k == "a":
+            self.yt_play(cur, "audio")
+        elif cur and k == "t":
+            self.yt_play(cur, "term")
+        elif cur and k == "o":
+            self.open_link(cur["url"])
+
+    # -- nightdeck (the Raspberry Pi)
+    def cmd_nightdeck(self, args, rest):
+        p = os.path.join(HOME, ".local", "bin", "netdeck-nightdeck")
+        script = p if os.access(p, os.X_OK) else shutil.which("netdeck-nightdeck")
+        if not script:
+            return self.err("netdeck-nightdeck isn't installed - run ./install.sh in the netdeck folder")
+        self.foreground([script] + args, pause=False, label="nightdeck", banner=False)
+
+
     # -- confirm
     def ask(self, question, action):
         self.confirm = (question, action)
@@ -3275,6 +3569,8 @@ class Deck:
             return self.settings_key(k)
         if self.mode == "news":
             return self.news_key(k)
+        if self.mode == "yt":
+            return self.yt_key(k)
 
         fkeys = {curses.KEY_F1: "help", curses.KEY_F2: "apps", curses.KEY_F3: "procs", curses.KEY_F4: "shell",
                  curses.KEY_F5: "scan", curses.KEY_F6: "news", curses.KEY_F7: "sysinfo", curses.KEY_F8: "settings", curses.KEY_F9: "theme +",
@@ -3484,6 +3780,10 @@ class Deck:
         self.err(f"'{prog}' not recognized - no such command or program on this deck. try: help / apps")
 
     def launch_app(self, a):
+        if a.kind == "yt":
+            return self.cmd_yt([], "")
+        if a.kind == "gui" and a.key in ("netflix", "prime", "disney", "svtplay"):
+            return self.stream_open(a.key)
         if a.kind == "gui":
             if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
                 self.log("no visual cortex detected ($DISPLAY unset) - GUI may fail to render", "warn",
@@ -4618,12 +4918,17 @@ def main():
     ap.add_argument("--no-fx", action="store_true", help="disable glitches and animations")
     ap.add_argument("--theme", help="color theme: " + ", ".join(THEMES) + " or a custom one")
     ap.add_argument("--term-opts", metavar="TERMINAL", help=argparse.SUPPRESS)
+    ap.add_argument("--palette", action="store_true", help="print the current skin's colors (role #hex) and exit")
     ap.add_argument("--list-apps", action="store_true", help="print the categorized program list and exit")
     ap.add_argument("--version", action="version", version=f"NETDECK//OS {VERSION}")
     args = ap.parse_args()
 
     if args.list_apps:
         list_apps_text()
+        return
+    if args.palette:
+        for role, hexv in resolve_theme(load_conf()).items():
+            print(role, hexv)
         return
     if args.term_opts:
         print("\n".join(term_opts(args.term_opts, load_conf())))
