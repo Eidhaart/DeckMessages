@@ -1909,7 +1909,11 @@ def configure_locale():
 if __name__ == "__main__":
     configure_locale()
     if len(sys.argv) > 1:
-        sys.exit(command_line(sys.argv[1:]))
+        try:
+            sys.exit(command_line(sys.argv[1:]))
+        except BrokenPipeError:  # output piped into e.g. head
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            sys.exit(1)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("nightdeck: the deck needs a terminal. Over SSH use `ssh -t`, "
               "or run `nightdeck help` for commands.", file=sys.stderr)
