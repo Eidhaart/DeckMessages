@@ -303,6 +303,8 @@ TUI_CATALOG = [
     ]),
     ("MEDIA // SYNTH", "music, video, visuals", [
         T("ncspot", "ncspot: Spotify client (premium)", "snap:ncspot", name="ncspot"),
+        T("playerctl", "playerctl: lets the deck show + control Spotify and browser audio", "apt:playerctl",
+          name="playerctl", cli=True),
         T("cmus", "cmus: music player for local files", "apt:cmus", name="cmus"),
         T("mpv", "mpv: plays anything", "apt:mpv", name="mpv"),
         T("cava", "cava: audio spectrum visualizer", "apt:cava", name="cava"),
@@ -907,6 +909,7 @@ STREAMS = [  # name, url, command, description
     ("Prime Video", "https://www.primevideo.com", "prime", "Amazon Prime Video  //  browser app window"),
     ("Disney+", "https://www.disneyplus.com", "disney", "Disney, Marvel, Star Wars  //  browser app window"),
     ("SVT Play", "https://www.svtplay.se", "svtplay", "Swedish public TV, free  //  browser app window"),
+    ("Spotify", "spotify", "spotify", "desktop app if installed, else the web player"),
     ("YouTube", "yt", "youtube", "search + play inside the deck (yt-dlp + mpv)"),
 ]
 
@@ -1157,6 +1160,183 @@ class News:
 
 
 # --------------------------------------------------------------------------------------------
+#  Music: background radio / YouTube audio through mpv (JSON IPC), plus anything else playing
+#  (Spotify app, browser tabs, media players) through playerctl / MPRIS.
+# --------------------------------------------------------------------------------------------
+
+RADIO = [  # key, name, group, url
+    ("nightride", "Nightride FM", "NIGHTRIDE FM", "https://stream.nightride.fm/nightride.mp3"),
+    ("chillsynth", "Chillsynth", "NIGHTRIDE FM", "https://stream.nightride.fm/chillsynth.mp3"),
+    ("darksynth", "Darksynth", "NIGHTRIDE FM", "https://stream.nightride.fm/darksynth.mp3"),
+    ("datawave", "Datawave", "NIGHTRIDE FM", "https://stream.nightride.fm/datawave.mp3"),
+    ("spacesynth", "Spacesynth", "NIGHTRIDE FM", "https://stream.nightride.fm/spacesynth.mp3"),
+    ("defcon", "DEF CON Radio", "SOMAFM", "https://ice1.somafm.com/defcon-128-mp3"),
+    ("synphaera", "Synphaera", "SOMAFM", "https://ice1.somafm.com/synphaera-128-mp3"),
+    ("vaporwaves", "Vaporwaves", "SOMAFM", "https://ice1.somafm.com/vaporwaves-128-mp3"),
+    ("groovesalad", "Groove Salad", "SOMAFM", "https://ice1.somafm.com/groovesalad-128-mp3"),
+    ("dronezone", "Drone Zone", "SOMAFM", "https://ice1.somafm.com/dronezone-128-mp3"),
+    ("p1", "P1", "SVERIGES RADIO", "https://sverigesradio.se/topsy/direkt/srapi/132.mp3"),
+    ("p2", "P2", "SVERIGES RADIO", "https://sverigesradio.se/topsy/direkt/srapi/163.mp3"),
+    ("p3", "P3", "SVERIGES RADIO", "https://sverigesradio.se/topsy/direkt/srapi/164.mp3"),
+]
+MPV_SOCK = os.path.join(CACHE_DIR, "mpv.sock")
+MPV_LABEL = os.path.join(CACHE_DIR, "mpv.label")
+
+
+class Player:
+    def __init__(self):
+        self.now = None   # dict(source, name, artist, title, pos, dur, playing, live)
+        saved = readf(MPV_LABEL).strip().split("\t")
+        self.label = saved[0] or "BACKGROUND"
+        self.station = saved[1] if len(saved) > 1 and saved[1] else None
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    # ---- deck-owned mpv
+    def ipc(self, *cmd, timeout=0.4):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect(MPV_SOCK)
+            s.sendall((json.dumps({"command": list(cmd)}) + "\n").encode())
+            buf = b""
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    return None
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    try:
+                        msg = json.loads(line)
+                    except ValueError:
+                        continue
+                    if "error" in msg:  # skip event lines, return the reply
+                        return msg.get("data") if msg["error"] == "success" else None
+        finally:
+            s.close()
+
+    def mpv_alive(self):
+        if not os.path.exists(MPV_SOCK):
+            return False
+        try:
+            self.ipc("get_property", "pid")
+            return True
+        except OSError:
+            return False
+
+    def play(self, url, label, station=None):
+        mpv = shutil.which("mpv")
+        if not mpv:
+            return "needs mpv - install it with: get mpv"
+        self.stop()
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        try:
+            os.remove(MPV_SOCK)
+        except OSError:
+            pass
+        try:
+            subprocess.Popen([mpv, "--no-video", "--no-terminal", "--idle=no", f"--input-ipc-server={MPV_SOCK}",
+                              "--volume=80", url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            return f"couldn't start mpv: {e}"
+        self.label, self.station = label, station
+        try:
+            with open(MPV_LABEL, "w") as fh:
+                fh.write(f"{label}\t{station or ''}")
+        except OSError:
+            pass
+        return None
+
+    def stop(self):
+        if self.mpv_alive():
+            try:
+                self.ipc("quit")
+            except OSError:
+                pass
+            self.now = None
+            return True
+        return False
+
+    # ---- controls: deck mpv first, otherwise whatever MPRIS player is active
+    def _ctl(self, args):
+        if shutil.which("playerctl"):
+            subprocess.run(["playerctl"] + args, capture_output=True, timeout=2)
+            return True
+        return False
+
+    def toggle(self):
+        if self.mpv_alive():
+            self.ipc("cycle", "pause")
+            return True
+        return self._ctl(["play-pause"])
+
+    def skip(self, step):
+        if self.mpv_alive():
+            if self.station:  # radio: hop to the neighbouring station
+                keys = [r[0] for r in RADIO]
+                i = (keys.index(self.station) + step) % len(keys) if self.station in keys else 0
+                k, name, _g, url = RADIO[i]
+                self.play(url, name, k)
+            else:
+                self.ipc("seek", 30 * step)
+            return True
+        return self._ctl(["next" if step > 0 else "previous"])
+
+    def volume(self, delta):
+        if self.mpv_alive():
+            self.ipc("add", "volume", delta)
+            return int(self.ipc("get_property", "volume") or 0)
+        if self._ctl(["volume", f"{abs(delta) / 100:.2f}{'+' if delta > 0 else '-'}"]):
+            return None
+        return None
+
+    # ---- now-playing poller
+    def _loop(self):
+        while True:
+            try:
+                self.now = self._poll()
+            except Exception:
+                self.now = None
+            time.sleep(1.0)
+
+    def _poll(self):
+        if self.mpv_alive():
+            title = ""
+            meta = self.ipc("get_property", "metadata") or {}
+            if isinstance(meta, dict):
+                title = meta.get("icy-title") or meta.get("title") or ""
+            title = title or self.ipc("get_property", "media-title") or ""
+            dur = self.ipc("get_property", "duration")
+            pos = self.ipc("get_property", "time-pos") or 0
+            paused = self.ipc("get_property", "pause")
+            artist, _, song = title.partition(" - ")
+            if not song:
+                artist, song = "", title
+            return dict(source="mpv", name=self.label, artist=artist.strip(), title=song.strip(),
+                        pos=float(pos or 0), dur=float(dur or 0), playing=not paused,
+                        live=bool(self.station) or not dur)
+        if not shutil.which("playerctl"):
+            return None
+        r = subprocess.run(["playerctl", "-a", "metadata", "--format",
+                            "{{playerName}}\t{{status}}\t{{artist}}\t{{title}}\t{{position}}\t{{mpris:length}}"],
+                           capture_output=True, text=True, timeout=1.5)
+        best = None
+        for line in r.stdout.splitlines():
+            f = (line.split("\t") + [""] * 6)[:6]
+            if f[1] not in ("Playing", "Paused") or not (f[2] or f[3]):
+                continue
+            if best is None or (f[1] == "Playing" and best[1] != "Playing"):
+                best = f
+        if not best:
+            return None
+        name, status, artist, title, pos, length = best
+        return dict(source="mpris", name=name.split(".")[0].upper(), artist=artist, title=title,
+                    pos=int(pos or 0) / 1e6, dur=int(length or 0) / 1e6, playing=status == "Playing",
+                    live=not length)
+
+
+# --------------------------------------------------------------------------------------------
 #  Program catalog
 # --------------------------------------------------------------------------------------------
 
@@ -1287,6 +1467,8 @@ class Catalog:
         for name, url, key, desc in STREAMS:
             if url == "yt":
                 stream_apps.append(App(name, "yt", ["yt"], desc, key=key))
+            elif url == "spotify":
+                stream_apps.append(App(name, "gui", ["spotify"], desc, key=key))
             else:
                 argv = web_app_argv(url)
                 if argv:
@@ -1469,6 +1651,13 @@ COMMANDS = [
     ("svtplay", "", "open SVT Play", []),
     ("yt", "[search]", "YouTube: search and play videos in the deck", ["youtube"]),
     ("nightdeck", "[command]", "jack into the nightdeck Raspberry Pi over SSH", ["pi", "jackpi"]),
+    ("music", "[station]", "background music: synthwave radio, SomaFM, Sveriges Radio, Spotify", ["radio"]),
+    ("spotify", "", "open Spotify (desktop app or web player)", []),
+    ("play", "", "play / pause whatever is playing   (Alt+P)", ["pause"]),
+    ("next", "", "next track or station   (Alt+N)", ["skip"]),
+    ("prev", "", "previous track or station   (Alt+B)", ["previous"]),
+    ("stop", "", "stop the music   (Alt+X)", []),
+    ("vol", "<+n|-n>", "music volume", ["volume"]),
     ("rain", "", "data rain screensaver", ["screensaver"]),
     ("memo", "<text>", "write a data shard to the vault", ["note", "shard"]),
     ("shards", "[n]", "read the latest data shards", ["notes"]),
@@ -1496,7 +1685,7 @@ PANEL_HOME = {"sys": "left", "mem": "left", "disk": "left", "net": "left", "bio"
 JP_LABELS = {
     "SYSCORE": "演算", "MEMORY": "記憶", "STORAGE": "保存", "NET UPLINK": "接続", "VITALS": "生体",
     "PROCESSES": "処理", "DOCK": "装備", "CONSOLE": "端末", "NEURAL LINK": "神経", "DATASTREAM": "データ",
-    "PREVIEW": "外観", "NEWSFEED": "報道", "NEWS // NYHETER": "報道", "YOUTUBE // SIGNAL SEARCH": "映像", "ARSENAL // INSTALLED PROGRAMS": "兵器庫", "PROCESS MANAGER": "処理",
+    "PREVIEW": "外観", "MUSIC // BACKGROUND SIGNAL": "音楽", "NEWSFEED": "報道", "NEWS // NYHETER": "報道", "YOUTUBE // SIGNAL SEARCH": "映像", "ARSENAL // INSTALLED PROGRAMS": "兵器庫", "PROCESS MANAGER": "処理",
     "CODEX // COMMAND REFERENCE": "案内", "TUNE // CUSTOMIZE THE DECK": "外観", "CONFIRM": "確認",
 }
 
@@ -1575,6 +1764,7 @@ class Deck:
         self.notes = deque()  # messages from background threads
         self.toasts = []
         self.news = News()
+        self.player = Player()
         self.next_news = 0.0
         self._pn = None  # panel number for the next panel() call
 
@@ -1711,6 +1901,8 @@ class Deck:
         w = min(52, self.W // 3)
         x = self.W - w - 2
         y = self.H - 3
+        if self.nowplaying_rect():
+            y -= 4
         for title, body, role, until in reversed(self.toasts):
             h = 3 if body else 2
             y -= h
@@ -1832,6 +2024,9 @@ class Deck:
             self.draw_news_overlay()
         elif self.mode == "yt":
             self.draw_yt()
+        elif self.mode == "music":
+            self.draw_music()
+        self.draw_nowplaying()
         self.draw_toasts()
         if self.confirm:
             self.draw_confirm()
@@ -2728,6 +2923,7 @@ class Deck:
         lines.append([])
         lines.append([("KEYS", "pri")])
         keys = [("F1-F10", "see the bar at the bottom"), ("ALT+1 … ALT+9", "launch dock slot"),
+                ("ALT+P / N / B / X", "music: play-pause / next / back / stop"),
                 ("TAB", "complete commands, programs, paths"),
                 ("↑ / ↓", "command history"), ("PGUP / PGDN", "scroll the console"),
                 ("CTRL+C", "kill running job / clear input"), ("CTRL+L", "clear console"),
@@ -2781,7 +2977,8 @@ class Deck:
         rows += [("sec", "TYPE", ""), ("font", "font", "Font family"), ("size", "font_size", "Font size")]
         rows += [("sec", "EFFECTS", "")]
         rows += [("orn", "ornament", "Panel ornament")]
-        rows += [("bool", k, lab) for k, lab in (("fx", "Glitches & animations"), ("scan", "Scanline rows"),
+        rows += [("bool", k, lab) for k, lab in (("music_bar", "Now-playing rectangle"),
+                                                 ("fx", "Glitches & animations"), ("scan", "Scanline rows"),
                                                  ("boot", "Boot sequence"), ("ticker", "News ticker"),
                                                  ("news", "Live news (SVT, Ekot, BBC…)"),
                                                  ("neural", "Neural readout in top bar"),
@@ -3371,7 +3568,8 @@ class Deck:
     def draw_yt(self):
         ov = self.ov
         y, x, h, w = self.box("YOUTUBE // SIGNAL SEARCH",
-                              "/ search  ENTER play  a audio  t in terminal  o browser  ESC close", role="bad")
+                              "/ search  ENTER play  b background  a audio  t terminal  o browser  ESC close",
+                              role="bad")
         r = y + 1
         caret = "█" if ov.get("typing") and int(self.now * 2.2) % 2 == 0 else " "
         self.put(r, x + 3, "SEARCH ▸ ", self.c("dim", r))
@@ -3485,6 +3683,12 @@ class Deck:
             self.yt_play(cur, "video")
         elif cur and k == "a":
             self.yt_play(cur, "audio")
+        elif cur and k == "b":
+            err = self.player.play(cur["url"], "YOUTUBE")
+            if err:
+                self.err(err)
+            else:
+                self.toast("♪ BACKGROUND // YOUTUBE", fit(cur["title"], 46), "mag", 4)
         elif cur and k == "t":
             self.yt_play(cur, "term")
         elif cur and k == "o":
@@ -3497,6 +3701,176 @@ class Deck:
         if not script:
             return self.err("netdeck-nightdeck isn't installed - run ./install.sh in the netdeck folder")
         self.foreground([script] + args, pause=False, label="nightdeck", banner=False)
+
+
+    # -- music
+    def nowplaying_rect(self):
+        """(y, x, w) of the now-playing rectangle, or None when nothing plays or there's no room."""
+        if not self.conf.get("music_bar", True) or not self.player.now or self.W < 90 or self.H < 22:
+            return None
+        w = min(56, max(40, self.W // 3))
+        return self.H - 5, self.W - w - 2, w
+
+    def draw_nowplaying(self):
+        rect = self.nowplaying_rect()
+        if not rect:
+            return
+        y, x, w = rect
+        np_ = self.player.now
+        tint = self.pal("txt", "tint")
+        for i in range(3):
+            self.put(y + i, x, " " * w, tint)
+            self.put(y + i, x, "▌", self.pal("mag", "tint", True))
+        jp = " // 音楽" if self.conf.get("kanji", True) else ""
+        head = f"♪ {np_['name'][:24]}"
+        self.put(y, x + 2, head, self.pal("mag", "tint", True))
+        self.put(y, x + 2 + len(head), jp, self.pal("dim", "tint"))
+        state = "▶" if np_["playing"] else "❚❚"
+        if np_["playing"]:
+            eq = "".join(SPARK[random.randint(1, 7)] for _ in range(5))
+            self.put(y, x + w - 9, eq, self.pal("acc", "tint"))
+        self.put(y, x + w - 3, state, self.pal("hi" if np_["playing"] else "dim", "tint", True))
+        line = f"{np_['artist']} — {np_['title']}" if np_["artist"] else (np_["title"] or "…")
+        self.put(y + 1, x + 2, fit(clean_title(line), w - 4), self.pal("txt", "tint", True))
+        if np_["live"]:
+            tail = f"● LIVE  {self.fmt_len(np_['pos']).strip()}" if np_["pos"] >= 1 else "● LIVE"
+            self.put(y + 2, x + 2, tail, self.pal("bad", "tint", True))
+            self.put(y + 2, x + 2 + len(tail) + 2, "alt+p pause · alt+n next · alt+x stop"[: w - len(tail) - 6],
+                     self.pal("dim", "tint"))
+        else:
+            t = f"{self.fmt_len(np_['pos']).strip()} / {self.fmt_len(np_['dur']).strip()}"
+            bw = w - 4 - len(t) - 2
+            n = int(bw * min(1.0, np_["pos"] / np_["dur"])) if np_["dur"] else 0
+            self.put(y + 2, x + 2, "▰" * n, self.pal("mag", "tint", True))
+            self.put(y + 2, x + 2 + n, "▱" * (bw - n), self.pal("line", "tint"))
+            self.put(y + 2, x + w - len(t) - 2, t, self.pal("dim", "tint"))
+
+    def music_entries(self):
+        out = [("spotify", "Spotify", "STREAMING", "desktop app if installed, else the web player")]
+        out += [(k, name, group, url) for k, name, group, url in RADIO]
+        out.append(("yt", "YouTube audio", "YOUTUBE", "search, then b plays it in the background"))
+        return out
+
+    def cmd_music(self, args, rest):
+        if args:
+            return self.cmd_radio(args, rest)
+        self.mode, self.ov = "music", {"sel": 1, "top": 0}
+
+    def cmd_radio(self, args, rest):
+        if not args:
+            return self.cmd_music([], "")
+        q = rest.lower().replace(" ", "")
+        hit = next((r for r in RADIO if q in (r[0], r[1].lower().replace(" ", ""))), None) or \
+            next((r for r in RADIO if q in r[1].lower().replace(" ", "")), None)
+        if not hit:
+            return self.err("unknown station - options: " + " ".join(r[0] for r in RADIO))
+        self.play_station(hit)
+
+    def play_station(self, r):
+        k, name, group, url = r
+        err = self.player.play(url, name, k)
+        if err:
+            return self.err(err)
+        self.log([("tuning ▸ ", "txt"), (name, "mag"), (f"  // {group.lower()}", "dim")], tag="MUSIC", tag_role="mag")
+        self.toast(f"♪ TUNED // {name.upper()}", group.lower() + "  //  alt+p pause · alt+x stop", "mag", 4)
+
+    def cmd_spotify(self, args, rest):
+        if shutil.which("spotify"):
+            return self.spawn(["spotify"], "Spotify")
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return self.err("Spotify needs a screen - no display found (ncspot works in the terminal: get ncspot)")
+        argv = web_app_argv("https://open.spotify.com")
+        if not argv:
+            return self.err("no browser found for the Spotify web player")
+        self.spawn(argv, "Spotify")
+        self.info("tip: the desktop app is nicer - sudo snap install spotify", "dim")
+
+    def cmd_play(self, args, rest):
+        if not self.player.toggle():
+            self.err("nothing to control - start something with: music")
+
+    def cmd_next(self, args, rest):
+        if not self.player.skip(1):
+            self.err("nothing playing")
+
+    def cmd_prev(self, args, rest):
+        if not self.player.skip(-1):
+            self.err("nothing playing")
+
+    def cmd_stop(self, args, rest):
+        if self.player.stop():
+            self.info("music stopped", "dim")
+        elif not self.player._ctl(["stop"]):
+            self.err("nothing playing")
+
+    def cmd_vol(self, args, rest):
+        d = 10
+        if args:
+            try:
+                d = int(args[0])
+            except ValueError:
+                return self.err("usage: vol +10 | vol -10")
+        v = self.player.volume(d)
+        self.info(f"volume {v}%" if v is not None else f"volume {'+' if d > 0 else ''}{d}%", "acc")
+
+    def draw_music(self):
+        ov = self.ov
+        y, x, h, w = self.box("MUSIC // BACKGROUND SIGNAL",
+                              "↑↓ select  ENTER play  p pause  x stop  ESC close", role="mag")
+        ents = self.music_entries()
+        ov["sel"] = max(0, min(ov.get("sel", 0), len(ents) - 1))
+        r = y + 2
+        last_group = None
+        cur = self.player.station if self.player.mpv_alive() else None
+        for i, (k, name, group, info) in enumerate(ents):
+            if r >= y + h - 2:
+                break
+            if group != last_group:
+                if last_group is not None:
+                    r += 1
+                self.put(r, x + 3, f"── {group} " + "─" * max(0, w - len(group) - 12), self.c("pri", r, True))
+                r += 1
+                last_group = group
+            sel = i == ov["sel"]
+            mark = "♪" if k == cur else " "
+            desc = info if not info.startswith("http") else info.split("/")[2]
+            if sel:
+                self.put(r, x + 3, " " * (w - 6), self.inv("mag"))
+                self.put(r, x + 4, f"▶ {mark} {name:<18} {desc}"[: w - 8], self.inv("mag"))
+            else:
+                self.put(r, x + 6, mark, self.c("mag", r, True))
+                self.put(r, x + 8, f"{name:<18}", self.c("txt", r, k == cur))
+                self.put(r, x + 27, desc[: w - 32], self.c("dim", r))
+            r += 1
+        if not shutil.which("mpv"):
+            self.put(y + h - 2, x + 3, "radio needs mpv - press i to install it", self.c("warn", y + h - 2))
+
+    def music_key(self, k):
+        ov = self.ov
+        ents = self.music_entries()
+        if k in ("\x1b", "q"):
+            self.mode = "main"
+        elif k in (curses.KEY_DOWN, "j"):
+            ov["sel"] = min(len(ents) - 1, ov.get("sel", 0) + 1)
+        elif k in (curses.KEY_UP, "k"):
+            ov["sel"] = max(0, ov.get("sel", 0) - 1)
+        elif k == "p":
+            self.player.toggle()
+        elif k == "x":
+            self.player.stop()
+        elif k == "i" and not shutil.which("mpv") and self.catalog.ready:
+            app = self.market_find("mpv")
+            if app:
+                self.install_app(app)
+        elif k in ("\n", "\r", curses.KEY_ENTER):
+            key, name, group, url = ents[ov.get("sel", 0)]
+            if key == "spotify":
+                self.mode = "main"
+                self.cmd_spotify([], "")
+            elif key == "yt":
+                self.cmd_yt([], "")
+            else:
+                self.play_station((key, name, group, url))
 
 
     # -- confirm
@@ -3571,6 +3945,8 @@ class Deck:
             return self.news_key(k)
         if self.mode == "yt":
             return self.yt_key(k)
+        if self.mode == "music":
+            return self.music_key(k)
 
         fkeys = {curses.KEY_F1: "help", curses.KEY_F2: "apps", curses.KEY_F3: "procs", curses.KEY_F4: "shell",
                  curses.KEY_F5: "scan", curses.KEY_F6: "news", curses.KEY_F7: "sysinfo", curses.KEY_F8: "settings", curses.KEY_F9: "theme +",
@@ -3642,7 +4018,10 @@ class Deck:
                 k2 = self.scr.get_wch()
             except curses.error:
                 k2 = None
-            if isinstance(k2, str) and k2 in "123456789" and k2:
+            if isinstance(k2, str) and k2 and k2.lower() in "pnbx":
+                {"p": lambda: self.player.toggle(), "n": lambda: self.player.skip(1),
+                 "b": lambda: self.player.skip(-1), "x": lambda: self.player.stop()}[k2.lower()]()
+            elif isinstance(k2, str) and k2 in "123456789" and k2:
                 items = self.dock_items()
                 i = int(k2) - 1
                 if i < len(items):
@@ -3782,6 +4161,8 @@ class Deck:
     def launch_app(self, a):
         if a.kind == "yt":
             return self.cmd_yt([], "")
+        if a.key == "spotify" and a.kind == "gui" and a.argv == ["spotify"]:
+            return self.cmd_spotify([], "")
         if a.kind == "gui" and a.key in ("netflix", "prime", "disney", "svtplay"):
             return self.stream_open(a.key)
         if a.kind == "gui":

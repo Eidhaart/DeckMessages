@@ -90,6 +90,33 @@ Settings (F8) turns live news off. If you've customized your layout, add the pan
 - **In-terminal playback (t)** uses real images in kitty and foot (sixel), and colored blocks elsewhere.
 - **Pin** any of them to the dock: `pin netflix`, `pin yt`.
 
+## Music in the background
+
+```
+▌ ♪ Nightride FM // 音楽                    ▅▃▇▂▆  ▶
+▌ Le Groupe Fantastique — Counterfeit
+▌ ● LIVE  4:12   alt+p pause · alt+n next · alt+x stop
+```
+
+A small **NOW PLAYING** rectangle sits in the bottom-right corner whenever something plays. It shows the station or
+player, the artist and title, and a progress bar, or `● LIVE` for radio. The deck stays fully usable underneath.
+
+- **`music`** opens the station picker. All stations are free and need no account:
+  - **Nightride FM:** Nightride, Chillsynth, Darksynth, Datawave, Spacesynth
+  - **SomaFM:** DEF CON Radio, Synphaera, Vaporwaves, Groove Salad, Drone Zone
+  - **Sveriges Radio:** P1, P2, P3
+  - `music darksynth` tunes in directly.
+- **Spotify:** `spotify` opens the desktop app (`sudo snap install spotify`) or the web player. Its track shows in
+  the rectangle too, as does audio from any other app or browser tab, once `playerctl` is installed
+  (`get playerctl`).
+- **YouTube:** in the YouTube screen, **b** plays a video's audio in the background.
+- **Controls:**
+  - **Alt+P** play/pause · **Alt+N** next · **Alt+B** back · **Alt+X** stop. For radio, next and back hop between
+    stations.
+  - Typed: `play`, `next`, `prev`, `stop`, `vol +10`.
+- **Keeps playing:** background music continues when you leave the deck, and the rectangle picks it up again next
+  time. Settings (F8) can hide the rectangle. Radio and YouTube audio need `mpv` (`get mpv`).
+
 ## nightdeck (the Raspberry Pi)
 
 ```bash
