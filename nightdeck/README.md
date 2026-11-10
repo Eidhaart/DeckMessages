@@ -23,7 +23,20 @@ cd nightdeck
 ~/.local/bin/nightdeck
 ```
 
-Setup uses sudo for Debian packages and the console autologin only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano, the w3m text browser, mpv and ffmpeg, then tries micro, QuickJS and the Bluetooth audio stack. It then downloads the current yt-dlp release into `~/.local/bin`. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves your login shell alone. It replaces the Nightdeck executable and the marked autostart block in your login profile (see below). To remove the executable, delete `~/.local/bin/nightdeck`.
+Setup uses sudo for Debian packages, the console autologin and the optional display settings only. It installs Python 3, Git, OpenSSH client, CA certificates, Zsh, nano, the w3m text browser, mpv and ffmpeg, then tries micro, QuickJS and the Bluetooth audio stack. It then downloads the current yt-dlp release into `~/.local/bin`. Rerun setup for an update. If dependencies are already installed, use `./setup.sh --skip-packages`. Setup leaves your login shell alone. It replaces the Nightdeck executable and the marked autostart block in your login profile (see below). To remove the executable, delete `~/.local/bin/nightdeck`.
+
+## Raspberry Pi Touch Display 2 (5")
+
+Run `./setup.sh --touch-display-2` once on the Pi, then reboot. Setup writes this line to `/boot/firmware/config.txt`, inside a marked block, after backing the file up once to `config.txt.nightdeck-backup`:
+
+```
+dtoverlay=vc4-kms-dsi-ili9881-5inch,disable_touch,rotation=90
+```
+
+- `disable_touch` turns the touch driver off completely. Nightdeck is keyboard-only, so taps do nothing and the driver doesn't load.
+- `rotation=90` turns the portrait 720×1280 panel to landscape 1280×720. If the picture is upside down for the way you mounted the screen, run `./setup.sh --skip-packages --touch-display-2=270` instead.
+- Setup also switches the console font to Terminus 16×32. On a 5" panel that gives about 80×22 characters, which is what Nightdeck is laid out for. The normal font would give about 160×45 characters, too small to read.
+- `./setup.sh --skip-packages --no-touch-display-2` removes the block and restores the previous font. A Pi 4 needs a cable for its 15-pin display connector; the display may only include the Pi 5's 22-pin cable.
 
 ## Autostart and jack out
 
