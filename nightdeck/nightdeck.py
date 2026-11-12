@@ -60,17 +60,29 @@ YTDLP_LOCAL = HOME / ".local/bin/yt-dlp"
 DOWNLOADS = VIDEOS / "watchlist"
 DL_STATES = ("", "downloading", "ready", "failed", "deleted")
 DL_MIN_FREE = 500 * 1024 * 1024
-# 480p H.264 + AAC in MP4: fits the 800x480 panel and plays with hardware decoding on a Pi 3B.
-DL_FORMAT_MERGE = ("bestvideo[height<=?480][vcodec^=avc1]+bestaudio[ext=m4a]/"
-                   "best[height<=?480][vcodec^=avc1]/best[height<=?480]/best")
-DL_FORMAT_SINGLE = "best[height<=?480][vcodec^=avc1]/best[height<=?480]/best"
+
+
+def video_height():
+    """480p for a Pi 3 or older (and its 800x480 panel); 720p for a Pi 4/5 (1280x720 Touch Display 2)."""
+    try:
+        model = Path("/proc/device-tree/model").read_text(errors="replace")
+    except OSError:
+        return 720
+    return 480 if re.search(r"Raspberry Pi (?:[123]|Zero|Model [AB])", model) else 720
+
+
+VIDEO_HEIGHT = video_height()
+# H.264 + AAC in MP4 at the panel's height: hardware-decoded on every Pi.
+DL_FORMAT_MERGE = (f"bestvideo[height<=?{VIDEO_HEIGHT}][vcodec^=avc1]+bestaudio[ext=m4a]/"
+                   f"best[height<=?{VIDEO_HEIGHT}][vcodec^=avc1]/best[height<=?{VIDEO_HEIGHT}]/best")
+DL_FORMAT_SINGLE = f"best[height<=?{VIDEO_HEIGHT}][vcodec^=avc1]/best[height<=?{VIDEO_HEIGHT}]/best"
 YTDLP_RELEASE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
 WATCH_MAX = 500
 MEDIA_EXT = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".ts", ".ogv", ".flv",
              ".wmv", ".3gp", ".mp3", ".flac", ".ogg", ".oga", ".opus", ".wav", ".m4a", ".aac"}
 VIDEO_OUTPUTS = ("ask", "screen", "terminal")
-# 480p H.264 fits the 800x480 panel and is what the Pi 3B can decode in hardware.
-YTDL_FORMAT = "bestvideo[height<=?480][vcodec^=avc1]+bestaudio/best[height<=?480]/best"
+YTDL_FORMAT = (f"bestvideo[height<=?{VIDEO_HEIGHT}][vcodec^=avc1]+bestaudio/"
+               f"best[height<=?{VIDEO_HEIGHT}]/best")
 MPV_KEYS = "space pause  //  left/right seek  //  9/0 volume  //  m mute  //  q stop"
 
 # Color pairs

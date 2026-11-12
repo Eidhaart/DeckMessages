@@ -2,7 +2,7 @@
 
 Run: python3 tests/smoke.py   (writes nothing outside a temporary HOME)
 """
-import json, subprocess, sys, tempfile, time
+import json, re, subprocess, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import Session
@@ -123,7 +123,7 @@ with tempfile.TemporaryDirectory() as home:
         s.send(key, wait)
     played = Path(home, "mpv.args").read_text().splitlines() if Path(home, "mpv.args").exists() else []
     check("URL stream capped for the Pi", played[-1:] == ["https://example.com/v?id=1"]
-          and any(a.startswith("--ytdl-format=") and "480" in a for a in played))
+          and any(a.startswith("--ytdl-format=") and re.search(r"height<=\?(480|720)\]", a) for a in played))
     check("non-http URL refused", "Use a plain http(s) URL" in s.text())
     for key, wait in [("\r", 0.3), ("\x1b", 0.4)] + QUIT:
         s.send(key, wait)
