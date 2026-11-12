@@ -27,16 +27,18 @@ Setup uses sudo for Debian packages, the console autologin and the optional disp
 
 ## Raspberry Pi Touch Display 2 (5")
 
-Run `./setup.sh --touch-display-2` once on the Pi, then reboot. Setup writes this line to `/boot/firmware/config.txt`, inside a marked block, after backing the file up once to `config.txt.nightdeck-backup`:
+Run `./setup.sh --touch-display-2` once on the Pi, then reboot. Setup follows Raspberry Pi's Touch Display 2 documentation and backs up each file once (`*.nightdeck-backup`):
 
-```
-dtoverlay=vc4-kms-dsi-ili9881-5inch,disable_touch,rotation=90
-```
+- **`/boot/firmware/config.txt`** gets a marked block with `dtoverlay=vc4-kms-dsi-ili9881-5inch,disable_touch`. That turns the touch driver off completely. Nightdeck is keyboard-only, so taps do nothing.
+- **`/boot/firmware/cmdline.txt`** gets `video=DSI-1:720x1280@60,rotate=90` added to its single line. That turns the portrait 720×1280 panel's text console to landscape 1280×720. If the picture is upside down for the way you mounted the screen, run `./setup.sh --skip-packages --touch-display-2=270` instead.
+- **Videos:** the console's `rotate=` doesn't apply to programs that draw straight to the screen, so Nightdeck reads it and passes the same rotation to mpv (`--video-rotate`). Videos then play in landscape too.
+- **Font:** setup switches the console font to Terminus 16×32. On a 5" panel that gives about 80×22 characters, which is what Nightdeck is laid out for. The normal font would give about 160×45, too small to read.
+- **Undo:** `./setup.sh --skip-packages --no-touch-display-2` removes the overlay block and the `video=DSI-1` setting, and restores the previous font.
 
-- `disable_touch` turns the touch driver off completely. Nightdeck is keyboard-only, so taps do nothing and the driver doesn't load.
-- `rotation=90` turns the portrait 720×1280 panel to landscape 1280×720. If the picture is upside down for the way you mounted the screen, run `./setup.sh --skip-packages --touch-display-2=270` instead.
-- Setup also switches the console font to Terminus 16×32. On a 5" panel that gives about 80×22 characters, which is what Nightdeck is laid out for. The normal font would give about 160×45 characters, too small to read.
-- `./setup.sh --skip-packages --no-touch-display-2` removes the block and restores the previous font. A Pi 4 needs a cable for its 15-pin display connector; the display may only include the Pi 5's 22-pin cable.
+**Connecting (Pi 4, power off):**
+1. **Ribbon to the display:** the included 15-to-15-pin ribbon goes into the display with its metal contacts facing up, away from the display.
+2. **Ribbon to the Pi:** the other end goes into the Pi's **DISPLAY** connector, with the contacts facing the USB and Ethernet ports.
+3. **Power cable:** the GPIO power cable goes from the display's **J1** to the Pi's header: **red to pin 2 (5V), black to pin 6 (ground)**. A wrong connection can damage the display.
 
 ## Autostart and jack out
 

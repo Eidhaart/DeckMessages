@@ -92,9 +92,9 @@ if [ "$display" != keep ]; then
         if [ "$display" = on ]; then
             cat >> "$new" <<EOF
 $dbegin
-# Raspberry Pi Touch Display 2 (5"): landscape, touch disabled. Remove: ./setup.sh --skip-packages --no-touch-display-2
+# Raspberry Pi Touch Display 2 (5"): touch disabled. Remove: ./setup.sh --skip-packages --no-touch-display-2
 [all]
-dtoverlay=vc4-kms-dsi-ili9881-5inch,disable_touch,rotation=$rotation
+dtoverlay=vc4-kms-dsi-ili9881-5inch,disable_touch
 $dend
 EOF
         fi
@@ -105,6 +105,21 @@ EOF
         rm -f -- "$new"
     else
         printf '%s\n' "No $bootcfg on this machine; skipping the display settings." >&2
+    fi
+    # Landscape text console, as Raspberry Pi documents it: video=DSI-1:720x1280@60,rotate=N in cmdline.txt.
+    # cmdline.txt must stay a single line; only our video=DSI-1 token is added or removed.
+    cmdline=/boot/firmware/cmdline.txt
+    if [ -f "$cmdline" ]; then
+        newcmd=$(mktemp)
+        head -n 1 "$cmdline" | sed -e 's/[[:space:]]*video=DSI-1:[^[:space:]]*//g' -e 's/[[:space:]]*$//' > "$newcmd"
+        if [ "$display" = on ]; then
+            sed -i "1s/\$/ video=DSI-1:720x1280@60,rotate=$rotation/" "$newcmd"
+        fi
+        if ! cmp -s "$newcmd" "$cmdline"; then
+            [ -f "$cmdline.nightdeck-backup" ] || sudo cp "$cmdline" "$cmdline.nightdeck-backup"
+            sudo cp "$newcmd" "$cmdline"
+        fi
+        rm -f -- "$newcmd"
     fi
     fontcfg=/etc/default/console-setup
     if [ -f "$fontcfg" ] && [ "$display" = on ]; then

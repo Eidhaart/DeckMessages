@@ -389,6 +389,15 @@ def size_label(count):
         count /= 1000
 
 
+def console_rotation(cmdline="/proc/cmdline"):
+    """Rotation set for the Touch Display 2 console (video=DSI-1:...,rotate=N), or 0."""
+    try:
+        match = re.search(r"video=DSI-1:\S*?rotate=(90|180|270)\b", Path(cmdline).read_text())
+    except OSError:
+        return 0
+    return int(match.group(1)) if match else 0
+
+
 def nearest_terminal_color(color):
     rgb = tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
     cube = (0, 95, 135, 175, 215, 255)
@@ -1729,6 +1738,9 @@ class Deck:
                 args.append("--ytdl-raw-options-append=js-runtimes=quickjs")
         if output == "screen":
             args += ["--fs", "--hwdec=auto-safe", "--profile=fast"]
+            rotation = console_rotation()
+            if rotation:  # the console's rotate= doesn't apply to programs drawing straight to the screen
+                args.append(f"--video-rotate={rotation}")
             if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
                 args.append("--vo=gpu,drm")  # draw straight on the display, no desktop needed
         else:
