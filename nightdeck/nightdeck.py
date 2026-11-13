@@ -38,6 +38,14 @@ THEMES = {
     "Cyberdeck": ("FF003C", "FFEE08", "00FFFF", "1DED83", "FAFAFA", "0E0E0E"),
     "Amber": ("FF8050", "FFCA70", "F5AA46", "FFE1A0", "FFF2D4", "161009"),
     "Ice": ("5CA7FF", "B3EAFF", "7BF5FF", "80FFD2", "EDF8FF", "0A1420"),
+    "Netrunner": ("00F0FF", "FF2BD6", "39FF88", "FFE600", "C9F7FF", "05060A"),
+    "Synthwave": ("FF2BD6", "FFD319", "00F0FF", "B967FF", "F5E9FF", "140326"),
+    "Vaporwave": ("FF71CE", "FFFB96", "01CDFE", "05FFA1", "F0E6FF", "1A0B2E"),
+    "Matrix": ("00FF41", "D4FF00", "00C2A8", "39FF14", "C8FFD0", "020A04"),
+    "Toxic": ("39FF88", "C6FF00", "7DFFB0", "00FFA2", "B8FFCB", "06100A"),
+    "Arasaka": ("E8002D", "F4F4F4", "B8B8B8", "FF5C5C", "EDEDED", "0A0A0A"),
+    "Blood Moon": ("D7263D", "FF9F1C", "F46036", "FFD166", "F2E9E4", "0D0208"),
+    "Ghost": ("9AA5B1", "FFFFFF", "8AB4F8", "9AE6B4", "E6E6E6", "101418"),
 }
 COLOR_ROLES = ("Header", "Selection", "Hints", "Vitals", "Text", "Background")
 GLYPH_MODES = ("auto", "unicode", "console", "ascii")
@@ -98,15 +106,17 @@ GLYPHS = {
         "logo": ("█▄ █ █ █▀▀ █ █ ▀█▀ █▀▄ █▀▀ █▀▀ █▄▀",
                  "█ ▀█ █ █▄█ █▀█  █  █▄▀ ██▄ █▄▄ █ █"),
     },
-    # Linux console fonts carry the VGA (CP437) set: box drawing, shades, half blocks, arrows.
+    # Linux console: only characters every console-setup font has (checked against Lat15/Uni2
+    # Fixed and Terminus 16x32): single/double box drawing, full block, light/medium shade, arrows.
     "console": {
         "h": "─", "v": "│", "tl": "┌", "tr": "┐", "bl": "└", "br": "┘", "lj": "┤", "rj": "├",
-        "full": "█", "empty": "░", "spark": "▄█", "spin": "░▒▓█", "ptr": "►",
-        "on": "■", "off": "·", "bar": "▌", "sep": "·", "up": "▲", "down": "▼",
-        "noise": "░▒▓█▀▄", "keys": "↑↓", "wire": "///", "cursor": "█",
-        "ok": "√", "dl": "↓", "wait": "·", "bad": "!", "note": "♪",
-        "logo": ("█▄ █ █ █▀▀ █ █ ▀█▀ █▀▄ █▀▀ █▀▀ █▄▀",
-                 "█ ▀█ █ █▄█ █▀█  █  █▄▀ ██▄ █▄▄ █ █"),
+        "full": "█", "empty": "░", "spark": "░▒█", "spin": "░▒█▒", "ptr": "»",
+        "on": "■", "off": "·", "bar": "■", "sep": "·", "up": "▲", "down": "▼",
+        "noise": "░▒█═║╬", "keys": "↑↓", "wire": "///", "cursor": "█",
+        "ok": "+", "dl": "↓", "wait": "·", "bad": "!", "note": "♦",
+        "logo": ("╔╗╔ ╦ ╔═╗ ╦ ╦ ╔╦╗ ╔╦╗ ╔═╗ ╔═╗ ╦╔═",
+                 "║║║ ║ ║ ╦ ╠═╣  ║   ║║ ║╣  ║   ╠╩╗",
+                 "╝╚╝ ╩ ╚═╝ ╩ ╩  ╩  ═╩╝ ╚═╝ ╚═╝ ╩ ╩"),
     },
     "ascii": {
         "h": "-", "v": "|", "tl": "+", "tr": "+", "bl": "+", "br": "+", "lj": "[", "rj": "]",
@@ -408,6 +418,46 @@ def console_rotation(cmdline="/proc/cmdline"):
     except OSError:
         return 0
     return int(match.group(1)) if match else 0
+
+
+STREAM_SERVICES = (
+    ("Netflix", "https://www.netflix.com/browse"),
+    ("Disney+", "https://www.disneyplus.com/"),
+    ("Prime Video", "https://www.primevideo.com/"),
+    ("SVT Play", "https://www.svtplay.se/"),
+    ("YouTube", "https://www.youtube.com/"),
+)
+STREAM_PACKAGES = ["cage", "chromium", "rpi-chromium-mods", "libwidevinecdm0", "wlr-randr"]
+
+
+def package_installed(name):
+    try:
+        result = subprocess.run(["dpkg-query", "-W", "-f=${Status}", name], capture_output=True,
+                                text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.stdout.strip() == "install ok installed"
+
+
+def on_deck_screen():
+    """True when running on the Pi's own display (a local text console), not over SSH."""
+    if os.environ.get("SSH_CONNECTION"):
+        return False
+    try:
+        return re.fullmatch(r"/dev/tty\d+", os.ttyname(sys.stdin.fileno())) is not None
+    except OSError:
+        return False
+
+
+def stream_command(url, rotation, profile):
+    """cage (kiosk Wayland) running Chromium full screen; rotates the output to match the console."""
+    chromium = ["chromium", "--kiosk", "--noerrdialogs", "--disable-infobars", "--no-first-run",
+                "--password-store=basic", "--ozone-platform=wayland", "--user-data-dir=" + str(profile), url]
+    if not rotation:
+        return ["cage", "-d", "--", *chromium]
+    script = ('for out in $(wlr-randr 2>/dev/null | awk \'/^[^ ]/{print $1}\'); do '
+              f'wlr-randr --output "$out" --transform {rotation} 2>/dev/null; done; exec "$@"')
+    return ["cage", "-d", "--", "sh", "-c", script, "nightdeck-stream", *chromium]
 
 
 def nearest_terminal_color(color):
@@ -970,7 +1020,7 @@ class Deck:
             lines.append("".join(cells).rjust(width))
         return lines
 
-    def vitals_panel(self, top, left, height, width, stats, blink):
+    def vitals_panel(self, top, left, height, width, stats, blink, queue=None):
         self.box(top, left, height, width, "VITALS")
         column, inner = left + 2, width - 4
         bottom = top + height - 1
@@ -1000,6 +1050,8 @@ class Deck:
         if stats.get("net"):
             down, up = stats["net"]
             facts.append(("NET", f"{self.g['down']} {rate(down)}  {self.g['up']} {rate(up)}", TEXT))
+        if queue is not None:  # the module list filled its box: show the watch-list queue here
+            facts.append(("QUEUE", f" {queue} new", VIT if queue else DIM))
         if self.audio.get("volume") is not None:
             facts.append(("SND", f"{self.audio.get('sink', '')[:18]} "
                           f"{'muted' if self.audio.get('muted') else str(self.audio['volume']) + '%'}",
@@ -1056,7 +1108,7 @@ class Deck:
             if fx and now >= glitch_at:
                 glitch, glitch_at = 3, now + random.uniform(3, 8)
             logo = self.g["logo"]
-            if wide and height >= 21 and width >= len(logo[0]) + 30:
+            if wide and height >= 20 and width >= len(logo[0]) + 30:
                 for row, line in enumerate(logo):
                     if glitch:
                         shift = random.choice((-1, 1))
@@ -1070,7 +1122,7 @@ class Deck:
                 typed = len(greeting) if not fx else min(len(greeting), int((now - self.started) * 28))
                 tail = self.g["cursor"] if typed < len(greeting) or int(now * 2) % 2 else " "
                 self.put(3, greeting[:typed] + tail, VIT, column=side)
-                top = 5
+                top = 3 + len(logo)
             glitch = max(0, glitch - 1)
             try:
                 stamp = WATCH.stat().st_mtime
@@ -1109,10 +1161,10 @@ class Deck:
                 left_width = 30
                 count = max(1, bottom - top - 1)
                 self.box(top, 1, bottom - top + 1, left_width, "MODULES")
-                self.vitals_panel(top, left_width + 2, bottom - top + 1, width - left_width - 3,
-                                  stats, int(now * 2) % 2 == 0)
                 first, column, inner = top + 1, 2, left_width - 2
                 free_rows = bottom - (first + len(actions))  # rows left inside the box under the list
+                self.vitals_panel(top, left_width + 2, bottom - top + 1, width - left_width - 3,
+                                  stats, int(now * 2) % 2 == 0, queue=None if free_rows >= 1 else queue)
                 if free_rows >= 1:
                     self.put(bottom - 1, "QUEUE".ljust(9) + f"{queue} new", VIT if queue else DIM, column=3)
                 if free_rows >= 3:
@@ -1206,6 +1258,7 @@ class Deck:
             ("news", "News wire", self.news),
             ("settings", "Settings", self.settings),
             ("bluetooth", "Bluetooth & sound", self.bluetooth),
+            ("tv", "Streaming TV", self.streaming),
             ("ssh", "SSH utilities", self.ssh),
             ("vitals", "System vitals", self.system),
             ("sheets", "Character sheets", lambda: self.view(
@@ -1520,6 +1573,7 @@ class Deck:
                 ("Play a URL or stream", self.video_url),
                 ("Output / " + self.preferences["video_out"].capitalize(), self.video_output_cycle),
                 ("Update yt-dlp", self.video_update),
+                ("Streaming TV (Netflix, Disney+, Prime Video...)", self.streaming),
             ]
             choice = self.menu("VIDEO // " + ("mpv" if mpv else "player offline"),
                                [label for label, _ in options], intro=intro, selected=selected)
@@ -1633,6 +1687,62 @@ class Deck:
         if self.play(targets):
             urls = {item["url"] for item in items}
             edit_watch(lambda entries: [i.update(done=True) for i in entries if i["url"] in urls])
+
+    def streaming(self):
+        """Netflix, Disney+, Prime Video etc. in a full-screen Chromium with Widevine (64-bit Pi OS)."""
+        selected = 0
+        while True:
+            machine = os.uname().machine
+            missing = [name for name in STREAM_PACKAGES if not package_installed(name)]
+            intro = ["Copy-protected streaming needs a real browser: Chromium with Widevine, full screen."]
+            options = []
+            if machine not in ("aarch64", "arm64"):
+                intro.append(f"This system is {machine}. Widevine on a Raspberry Pi needs 64-bit Raspberry Pi OS.")
+            elif missing:
+                intro.append("Not installed yet: " + ", ".join(missing) + " (about 300 MB).")
+                options.append(("Install streaming support", lambda: self.stream_install(missing)))
+            if not missing:
+                intro += ["Use the keyboard and its touchpad in the browser. Ctrl+W or Alt+F4 returns to Nightdeck.",
+                          "Your logins are remembered. Netflix, Disney+ and Prime Video don't officially support "
+                          "Linux, so playback and quality can vary (Prime Video often SD)."]
+                if not on_deck_screen():
+                    intro.append("Start it on the deck's own screen and keyboard; it can't open over SSH.")
+                options += [(name, lambda url=url: self.stream_open(url)) for name, url in STREAM_SERVICES]
+                options.append(("Open another website", self.stream_other))
+            choice = self.menu("STREAMING TV", [label for label, _ in options] or ["Back"],
+                               intro=intro, selected=selected)
+            if choice is None or not options:
+                return
+            selected = choice
+            options[choice][1]()
+
+    def stream_install(self, missing):
+        args = ["sudo", "apt-get", "install", "-y", *missing]
+        if self.confirm("STREAMING // install", args):
+            self.run(args)
+
+    def stream_open(self, url):
+        if not on_deck_screen():
+            self.notice("STREAMING", "Open Streaming TV on the deck's own screen. The browser needs the "
+                        "Pi's display and can't start from an SSH session.", ok=False)
+            return
+        profile = DATA / "browser"
+        profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.np and not self.np["paused"]:
+            np_control(self.np, "toggle")  # pause background music while a show plays
+        self.run(stream_command(url, console_rotation(), profile), pause=False)
+
+    def stream_other(self):
+        value = self.ask("STREAMING // https address", prefix="")
+        if not value:
+            return
+        value = value.strip()
+        if not value.startswith(("http://", "https://")):
+            value = "https://" + value
+        if not public_url(value, ("https", "http"), allow_query=True):
+            self.notice("STREAMING", "Use a plain web address.", ok=False)
+            return
+        self.stream_open(value)
 
     def video_install(self):
         args = ["sudo", "apt-get", "install", "--no-install-recommends", "mpv", "quickjs"]

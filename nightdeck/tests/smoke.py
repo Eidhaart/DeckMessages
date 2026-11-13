@@ -71,7 +71,9 @@ check("tab completion opens vitals", "SYSTEM // local telemetry" in screens[4])
 code, screens, raw = scenario(80, 24, "linux", "nightdeck_invalid.UTF-8", [
     ("x", 0.6), ("j", 0.3), ("q", 0.5), ("jjj", 0.2), ("\r", 1.0)])  # TERM=linux arrows differ
 check("linux console exits cleanly", code == 0 and "Traceback" not in raw)
-check("console glyphs on TERM=linux", "► 01" in screens[0] and "▶" not in screens[0])
+check("console glyphs on TERM=linux", "» 01" in screens[0] and "▶" not in screens[0])
+check("console logo uses only font-safe characters", "╔╗╔ ╦ ╔═╗" in screens[0]
+      and not any(ch in screens[0] for ch in "▄▀►▌√♪▓"))
 check("console palette repainted with theme", "\x1b]p1ff003c" in raw.lower() and "\x1b]p3ffee08" in raw.lower()
       and "\x1b]P0" in raw)
 check("console palette restored on exit", raw.rstrip().endswith("\x1b]R") or "\x1b]R" in raw[-200:])
@@ -193,10 +195,10 @@ with tempfile.TemporaryDirectory() as home:
     s = Session(80, 24, home=home, env={"PATH": env["PATH"], "DISPLAY": "", "WAYLAND_DISPLAY": ""})
     s.pump(0.6)
     s.send("x", 1.2)
-    check("dashboard shows queue count", "QUEUE    4 new" in s.text())
+    check("dashboard shows queue count", re.search(r"QUEUE\s+4 new", s.text()) is not None)
     cli("add", "https://example.com/c?v=live")
     s.pump(0.8)
-    check("new link flashes on the dashboard", b"NEW LINK" in s.raw and "QUEUE    5 new" in s.text())
+    check("new link flashes on the dashboard", b"NEW LINK" in s.raw and re.search(r"QUEUE\s+5 new", s.text()) is not None)
     s.pump(2.5)
     check("finished download flashes READY", "READY " in s.raw.decode("utf-8", "replace")
           and "Title of live" in s.raw.decode("utf-8", "replace"))
@@ -548,6 +550,16 @@ with tempfile.TemporaryDirectory() as tmp:
     except ValueError as error:
         rejected = "Checksum mismatch" in str(error)
     check("tampered spotifyd download rejected", rejected)
+
+# 12. Streaming TV: module opens; launcher rotates the output and starts Chromium in cage
+code, screens, raw = scenario(80, 24, "xterm-256color", "C.UTF-8", [
+    ("x", 0.6), ("/", 0.4), ("tv\r", 1.5), ("\x1b", 0.5)] + QUIT)
+check("streaming module opens", "STREAMING TV" in screens[2] and "Widevine" in screens[2])
+cmd = nd.stream_command("https://www.netflix.com/browse", 270, "/tmp/profile")
+check("stream launcher uses cage + kiosk Chromium", cmd[:3] == ["cage", "-d", "--"]
+      and "--kiosk" in cmd and cmd[-1] == "https://www.netflix.com/browse")
+check("stream launcher rotates like the console", "--transform 270" in cmd[5]
+      and nd.stream_command("https://x.example/", 0, "/p")[3] == "chromium")
 
 print("\n" + ("ALL PASSED" if not failures else f"{len(failures)} FAILED"))
 sys.exit(1 if failures else 0)
