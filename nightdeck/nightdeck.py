@@ -46,6 +46,7 @@ THEMES = {
     "Arasaka": ("E8002D", "F4F4F4", "B8B8B8", "FF5C5C", "EDEDED", "0A0A0A"),
     "Blood Moon": ("D7263D", "FF9F1C", "F46036", "FFD166", "F2E9E4", "0D0208"),
     "Ghost": ("9AA5B1", "FFFFFF", "8AB4F8", "9AE6B4", "E6E6E6", "101418"),
+    "Neon Tide": ("EE4F47", "3CDAF0", "36A4B6", "3CDAF0", "D8F6FB", "0C0E1C"),
 }
 COLOR_ROLES = ("Header", "Selection", "Hints", "Vitals", "Text", "Background")
 GLYPH_MODES = ("auto", "unicode", "console", "ascii")
