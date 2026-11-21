@@ -75,7 +75,8 @@ Nightdeck v2 has the same tools as before, with a livelier cyberdeck interface m
 The dashboard borrows the split navigation, clock and command prompt from [DeckMessages](https://github.com/Eidhaart/DeckMessages). On wider terminals, numbered modules sit beside live local vitals. On smaller terminals, a one-line CPU, RAM and temperature readout sits above the scrolling module list. Modules use the full width for diffs, headlines and other text.
 
 - Press **1–9** to open a dashboard module directly and **0** to jack out. Or press **/** and type a command such as `git`, `news` or `claude`. **Tab** completes the name. Use **/help** for the command list.
-- **Esc** goes back. On the dashboard, **Esc** opens the Jack out menu.
+- **Esc** or **q** goes back. **Backspace** and **←** also go back in menus and text views, for keyboards whose Esc key only works in a phone mode. On the dashboard, **Esc** or **q** opens the Jack out menu.
+- **Folding Bluetooth keyboards** often have iOS, Android and Windows modes. Use **Windows** mode (often **Fn+E** or **Fn+C**, see the keyboard's manual) so Esc and the arrow keys send normal key codes.
 
 - **Up/Down** or **j/k** moves. **Enter** selects. In a text view, **Page Up/Down** scrolls by page.
 - A compact terminal around **80 columns × 24 rows** fits an 800×480 display with an appropriate font. Menus scroll at smaller sizes and adapt when resized. The app uses the terminal's character grid and does not change the Pi's display settings.

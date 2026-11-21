@@ -94,6 +94,10 @@ YTDL_FORMAT = (f"bestvideo[height<=?{VIDEO_HEIGHT}][vcodec^=avc1]+bestaudio/"
                f"best[height<=?{VIDEO_HEIGHT}]/best")
 MPV_KEYS = "space pause  //  left/right seek  //  9/0 volume  //  m mute  //  q stop"
 
+# Keys that mean "back" in menus and views. Besides Esc and q: Backspace and the left arrow,
+# for keyboards whose Esc is a phone-style Back key (iOS/Android modes) the console never sees.
+BACK_KEYS = (27, ord("q"), 127, 8, curses.KEY_BACKSPACE, curses.KEY_LEFT)
+
 # Color pairs
 HEAD, SEL, HINT, VIT, TEXT, DIM, BADGE, SELBAR, KEYCAP = range(1, 10)
 
@@ -678,7 +682,7 @@ class Deck:
             self.view(title, "No entries.")
             return None
         selected = max(0, min(selected, len(choices) - 1))
-        hints = [(self.g["keys"], "move"), ("enter", "select"), ("esc", "back")]
+        hints = [(self.g["keys"], "move"), ("enter", "select"), ("esc/q", "back")]
         while True:
             height, width = self.frame(title, hints, f"[{selected + 1:02d}/{len(choices):02d}]")
             row = 4
@@ -722,7 +726,7 @@ class Deck:
             self.last_selected = selected
             if poll and key == -1:
                 return -1
-            if key in (27, ord("q")):
+            if key in BACK_KEYS:
                 return None
             if key in (10, 13, curses.KEY_ENTER):
                 return selected
@@ -771,7 +775,7 @@ class Deck:
 
     def view(self, title, body, kind=None):
         offset = 0
-        hints = [(self.g["keys"], "scroll"), ("pgup/dn", "page"), ("esc", "back")]
+        hints = [(self.g["keys"], "scroll"), ("pgup/dn", "page"), ("esc/q", "back")]
         while True:
             _, width = self.screen.getmaxyx()
             lines = []
@@ -795,7 +799,7 @@ class Deck:
                     self.put(4 + row, self.g["full"] if inside else self.g["v"],
                              HINT if inside else DIM, column=width - 2)
             key = self.screen.getch()
-            if key in (27, ord("q"), 10, 13):
+            if key in BACK_KEYS or key in (10, 13):
                 return
             offset += {curses.KEY_DOWN: 1, ord("j"): 1, curses.KEY_UP: -1,
                        ord("k"): -1, curses.KEY_NPAGE: page, ord(" "): page,

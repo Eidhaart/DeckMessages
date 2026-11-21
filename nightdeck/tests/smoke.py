@@ -561,5 +561,11 @@ check("stream launcher uses cage + kiosk Chromium", cmd[:3] == ["cage", "-d", "-
 check("stream launcher rotates like the console", "--transform 270" in cmd[5]
       and nd.stream_command("https://x.example/", 0, "/p")[3] == "chromium")
 
+# 13. Back without Esc: Backspace and the left arrow leave menus (keyboards whose Esc is a phone Back key)
+code, screens, raw = scenario(80, 24, "xterm-256color", "C.UTF-8", [
+    ("x", 0.6), ("9", 0.6), ("\x7f", 0.6), ("9", 0.6), ("\x1bOD", 0.6)] + QUIT)
+check("backspace leaves a menu", "SETTINGS" in screens[1] and "MODULES" in screens[2])
+check("left arrow leaves a menu", "SETTINGS" in screens[3] and "MODULES" in screens[4])
+
 print("\n" + ("ALL PASSED" if not failures else f"{len(failures)} FAILED"))
 sys.exit(1 if failures else 0)
