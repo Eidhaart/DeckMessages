@@ -142,7 +142,29 @@ The dashboard borrows the split navigation, clock and command prompt from [DeckM
   - Setup installs BlueZ, PipeWire, WirePlumber, the PipeWire Bluetooth plugin and rfkill, and adds you to the `bluetooth` group. Reboot once after setup. Without those, the module offers **Install Bluetooth & sound support**. If Bluetooth is soft-blocked, it offers **Unblock Bluetooth**.
   - **Pi 3B limits.** Wi-Fi and Bluetooth share one radio, so audio can crackle while Wi-Fi is busy, for example when streaming. Downloaded videos sound best, and Ethernet or a USB Bluetooth dongle avoids the problem. Bluetooth adds a little audio delay, which mpv compensates for in video. Headset microphones and calls aren't supported.
 - **System vitals** and **SSH utilities** sit unnumbered below Settings and open with `/vitals` and `/ssh`. The dashboard panel shows the same readings live.
-- **Character sheets.** Reserved menu entry. It sits unnumbered below Settings and opens with `/sheets`.
+- **Character sheets** (`/sheets`): live character sheets from **Foundry VTT** games, with edits and rolls from the deck. The layout is built for **Shadowrun Sixth World**, the `shadowrun6-eden` system.
+  - **How it connects:** a small Foundry module, **Nightdeck Link**, runs in the GM's Foundry window. It pushes the character to the deck the moment anything changes, including calculated values like dice pools and condition monitor sizes, and carries out the deck's commands. On the deck, the link service (`nightdeck link`, a user service started from the Character sheets screen) accepts connections from several games at once, so you can switch between your world and your friend's.
+  - **Online games:** for GMs outside your home network, the deck needs an internet address. Under **Character sheets → Internet access**, install and log in to **Tailscale**, then turn internet access on. That runs `tailscale funnel --bg 3010`, which gives the deck a free HTTPS address like `https://nightdeck.your-tailnet.ts.net`.
+  - **GM setup, once per Foundry:**
+    1. Install the module from the manifest URL shown under **Character sheets → Link setup** (`https://…/foundry/module.json`; the deck serves the module itself).
+    2. Enable **Nightdeck Link** in the world.
+    3. Under **Configure Settings → Nightdeck Link**, enter the deck's address (`wss://…/link`) and the **code** shown on the deck.
+  - The address and code are stored only in that GM's browser, so players never see the code. Making a new code on the deck locks out old connections when they reconnect.
+  - **On the sheet:**
+    - name, game and a **LIVE** marker
+    - all attributes, initiative, defense and attack rating, nuyen and karma
+    - **Physical** and **Stun** condition monitors (take damage, heal)
+    - **Edge** (spend, gain)
+    - **initiative roll**
+    - **weapons**: attack roll, and each attack uses a round; reload or set ammo
+    - **skills**: roll the pool, with specialization (+2), expertise (+3) or a custom modifier
+    - any dice pool
+    - the raw data
+  - **Rolls:** they run in Foundry and post to its chat as `Nd6cs>=5` with hits and glitches marked, and the result also shows on the deck. Other game systems show their raw data until they get a layout.
+  - **Requirements:**
+    - A **full GM** must have the world open, because the module runs in the active GM's browser.
+    - Foundry v12–v14.
+    - Tailscale Funnel's WebSocket support isn't spelled out in Tailscale's docs. If a remote GM can't connect, check that **Internet access** shows ON and that the address starts with `wss://`.
 
 ## Validation
 

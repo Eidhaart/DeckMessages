@@ -567,5 +567,91 @@ code, screens, raw = scenario(80, 24, "xterm-256color", "C.UTF-8", [
 check("backspace leaves a menu", "SETTINGS" in screens[1] and "MODULES" in screens[2])
 check("left arrow leaves a menu", "SETTINGS" in screens[3] and "MODULES" in screens[4])
 
+# 14. Character sheets: the real Foundry module (in a Node mock of Foundry) <-> link service <-> sheet
+import socket as _socket
+import urllib.request as _urlreq
+import zipfile as _zip
+import io as _io
+if _shutil.which("node"):
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory(dir="/tmp") as run:
+        probe = _socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        base = Path(__file__).resolve().parent.parent
+        env = dict(os.environ, HOME=home, XDG_RUNTIME_DIR=run, NIGHTDECK_LINK_PORT=str(port))
+        link = subprocess.Popen([sys.executable, str(base / "nightdeck.py"), "link"], env=env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cfg = Path(home, ".config/nightdeck/link.json")
+        wait_for(lambda: cfg.exists() and Path(run, "nightdeck-link.sock").exists(), 10)
+        token = json.loads(cfg.read_text())["token"]
+        manifest = json.loads(_urlreq.urlopen(f"http://127.0.0.1:{port}/foundry/module.json", timeout=5).read())
+        package = _zip.ZipFile(_io.BytesIO(_urlreq.urlopen(f"http://127.0.0.1:{port}/foundry/module.zip", timeout=5).read()))
+        script = package.read("scripts/nightdeck-link.js").decode()
+        check("link serves an installable Foundry module", manifest["id"] == "nightdeck-link"
+              and manifest["download"] == f"http://127.0.0.1:{port}/foundry/module.zip"
+              and "module.json" in package.namelist() and f'"ws://127.0.0.1:{port}/link"' in script)
+        events = []
+
+        def start_mock(token_value, world_id, title):
+            proc = subprocess.Popen(["node", str(base / "tests/foundry_mock.mjs"), str(base / "foundry/nightdeck-link.js")],
+                                    env=dict(os.environ, NIGHTDECK_URL=f"ws://127.0.0.1:{port}/link",
+                                             NIGHTDECK_TOKEN=token_value, WORLD_ID=world_id, WORLD_TITLE=title),
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+            def pump():
+                for line in proc.stdout:
+                    if line.startswith("EVENT "):
+                        events.append(json.loads(line[6:]))
+            threading.Thread(target=pump, daemon=True).start()
+            return proc
+        good = start_mock(token, "world-sr6", "Seattle Nights")
+        bad = start_mock("wrong-code-123456789", "world-bad", "Intruder")
+
+        def status():
+            sock = _socket.socket(_socket.AF_UNIX)
+            sock.connect(str(Path(run, "nightdeck-link.sock")))
+            sock.sendall(b'{"cmd": "status"}\n')
+            data = sock.makefile().readline()
+            sock.close()
+            return json.loads(data)
+        check("module connects with the right code", wait_for(lambda: len(status()["worlds"]) == 1, 10)
+              and status()["worlds"][0]["title"] == "Seattle Nights")
+        check("wrong code is refused", wait_for(lambda: any(e["kind"] == "warn" for e in events), 10)
+              and all(w["id"] != "world-bad" for w in status()["worlds"]))
+        s = Session(80, 24, home=home, env={"XDG_RUNTIME_DIR": run, "NIGHTDECK_LINK_PORT": str(port)})
+        s.pump(0.6)
+        for key, wait in [("x", 0.6), ("/", 0.4), ("sheets\r", 1.2)]:
+            s.send(key, wait)
+        check("sheets list the connected game", "Seattle Nights  [shadowrun6-eden, GM GM]" in s.text())
+        s.send("\r", 1.0)
+        check("players' characters are listed", "Kestrel  [Player]  Player One" in s.text())
+        s.send("\r", 2.5)
+        sheet = s.text()
+        check("live SR6 sheet renders", "Kestrel" in sheet and "LIVE" in sheet and "BOD 4" in sheet and "ESS 5.2" in sheet
+              and "INIT 8+1d6" in sheet and "0/10" in sheet and "2/10" in sheet and "3/4" in sheet
+              and "Firearms         9 dice  (+2 Pistols)" in sheet and "ammo 15/15" in sheet)
+        for key, wait in [("\r", 0.6), ("\r", 2.5)]:  # Physical -> Take 1 damage
+            s.send(key, wait)
+        check("damage goes to Foundry", any(e["kind"] == "updateActor" and e["changes"] == {"system.physical.dmg": 1}
+                                            for e in events))
+        check("sheet updates live from Foundry", "1/10" in s.text())
+        for key, wait in [(DOWN * 5, 0.4), ("\r", 0.6), ("\r", 2.5)]:  # Firearms -> roll 9 dice
+            s.send(key, wait)
+        check("skill roll posts to Foundry chat", any(e["kind"] == "chat" and e["formula"] == "9d6cs>=5"
+                                                      and "4 hits" in e["flavor"] for e in events)
+              and "4 hits" in s.text())
+        for key, wait in [("\x1b", 0.6), (UP, 0.4), ("\r", 0.6), ("\r", 2.5), ("\x1b", 2.5)]:  # weapon attack
+            s.send(key, wait)
+        check("weapon attack rolls and uses a round", any(e["kind"] == "updateItem" and e["changes"] == {"system.ammocount": 14}
+                                                          for e in events) and "ammo 14/15" in s.text())
+        for key, wait in [("\x1b", 0.6), ("\x1b", 0.6)] + QUIT:
+            s.send(key, wait)
+        check("sheets session exits cleanly", s.finish() == 0)
+        for proc in (good, bad, link):
+            proc.kill()
+else:
+    print("skip character sheet tests (needs node)")
+
 print("\n" + ("ALL PASSED" if not failures else f"{len(failures)} FAILED"))
 sys.exit(1 if failures else 0)

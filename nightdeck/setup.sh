@@ -43,6 +43,9 @@ temp=$(mktemp "$HOME/.local/bin/.nightdeck.XXXXXX")
 trap 'rm -f -- "$temp"' EXIT HUP INT TERM
 install -m 0755 nightdeck.py "$temp"
 mv -fT -- "$temp" "$HOME/.local/bin/nightdeck"
+# The Nightdeck Link module for Foundry VTT, served to GMs by `nightdeck link`.
+install -d "${XDG_DATA_HOME:-$HOME/.local/share}/nightdeck/foundry"
+install -m 0644 foundry/nightdeck-link.js "${XDG_DATA_HOME:-$HOME/.local/share}/nightdeck/foundry/nightdeck-link.js"
 # Debian's yt-dlp falls behind YouTube; install the official release (checksum-verified) per user.
 python3 "$HOME/.local/bin/nightdeck" update-ytdlp || printf '%s\n' 'yt-dlp update failed; retry later from Video player > Update yt-dlp.'
 

@@ -3,7 +3,9 @@
 import curses
 import datetime
 import fcntl
+import base64
 import hashlib
+import hmac
 import io
 import json
 import locale
@@ -12,8 +14,11 @@ from pathlib import Path
 import random
 import re
 import shlex
+import secrets
 import shutil
 import socket
+import socketserver
+import struct
 import subprocess
 import sys
 import tarfile
@@ -25,6 +30,8 @@ import unicodedata
 import urllib.request
 from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
+import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html.parser import HTMLParser
 
 VERSION = "2.0"
@@ -246,7 +253,7 @@ def load_settings():
     defaults = {"theme": "Cyberdeck", "custom": list(THEMES["Cyberdeck"]),
                 "fx": True, "boot": True, "glyphs": "auto", "claude_host": "", "claude_dir": "",
                 "video_out": "ask", "download": True,
-                "bt_auto": ""}
+                "bt_auto": "", "sheet_last": {}}
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -261,6 +268,9 @@ def load_settings():
         isinstance(value, str) and COLOR.fullmatch(value) for value in custom
     ):
         defaults["custom"] = custom
+    last = saved.get("sheet_last")
+    if isinstance(last, dict) and all(isinstance(last.get(k), str) for k in ("world", "actor", "name")):
+        defaults["sheet_last"] = {k: clean(last[k])[:120] for k in ("world", "actor", "name")}
     if isinstance(saved.get("bt_auto"), str) and (saved["bt_auto"] == "" or BT_MAC.fullmatch(saved["bt_auto"])):
         defaults["bt_auto"] = saved["bt_auto"]
     if isinstance(saved.get("download"), bool):
@@ -1266,8 +1276,7 @@ class Deck:
             ("tv", "Streaming TV", self.streaming),
             ("ssh", "SSH utilities", self.ssh),
             ("vitals", "System vitals", self.system),
-            ("sheets", "Character sheets", lambda: self.view(
-                "CHARACTER SHEETS", "Reserved.\n\nSlot allocated for a future module.")),
+            ("sheets", "Character sheets", self.sheets),
             ("exit", "Jack out", self.power),
         ]
         if self.preferences["bt_auto"] and shutil.which("bluetoothctl"):
@@ -2133,6 +2142,365 @@ class Deck:
             self.notice("SPOTIFY", "systemd said: " + clean(result.stderr.strip() or result.stdout.strip())[:200],
                         ok=False)
 
+    # ---------- character sheets (Foundry VTT link) ----------
+
+    def sheets(self):
+        """Live character sheets from Foundry VTT games, through the link service on the deck."""
+        selected = 0
+        while True:
+            status = link_call({"cmd": "status"}, timeout=5)
+            intro, options = [], []
+            if status is None:
+                intro.append("The link service isn't running. It connects Foundry VTT games to the deck.")
+                options.append(("Start the link service", self.link_start))
+            else:
+                worlds = status.get("worlds") or []
+                last = self.preferences.get("sheet_last") or {}
+                if worlds:
+                    intro.append(f"{len(worlds)} game{'s' if len(worlds) != 1 else ''} connected. Pick one.")
+                else:
+                    intro += ["No game connected yet. A GM needs Foundry open with the Nightdeck Link module",
+                              "set up (see Link setup). Connected games appear here by themselves."]
+                for world in worlds:
+                    if last.get("world") == world.get("id"):
+                        options.append((f"Continue: {last.get('name')}  ({world.get('title')})",
+                                        lambda w=world, l=last: self.sheet(w, {"id": l["actor"], "name": l["name"]})))
+                for world in worlds:
+                    label = f"{world.get('title') or world.get('id')}  [{world.get('system')}, GM {world.get('gm')}]"
+                    options.append((label, lambda w=world: self.sheet_world(w)))
+            options += [("Link setup (for GMs)", self.link_setup), ("Internet access (Tailscale)", self.link_tailscale)]
+            choice = self.menu("CHARACTER SHEETS", [label for label, _ in options], intro=intro,
+                               selected=selected, poll=True)
+            if choice == -1:
+                selected = self.last_selected
+                continue
+            if choice is None:
+                return
+            selected = choice
+            options[choice][1]()
+
+    def link_start(self):
+        write_link_service()
+        user_systemctl("daemon-reload")
+        result = user_systemctl("enable", "--now", "nightdeck-link")
+        for _ in range(20):
+            if link_call({"cmd": "status"}, timeout=2) is not None:
+                return
+            time.sleep(0.2)
+        if result.returncode:  # no user systemd here: run it in the background for this session
+            try:
+                subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "link"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError:
+                pass
+            for _ in range(25):
+                if link_call({"cmd": "status"}, timeout=2) is not None:
+                    return
+                time.sleep(0.2)
+        self.notice("CHARACTER SHEETS", "The link service didn't start. Check: systemctl --user status nightdeck-link",
+                    ok=False)
+
+    def link_base(self):
+        public = link_settings().get("public_url", "").rstrip("/")
+        if public:
+            return public
+        _, url, funnel = tailscale_status()
+        return url if url and funnel else ""
+
+    def link_setup(self):
+        while True:
+            settings, base = link_settings(), self.link_base()
+            intro = []
+            if base:
+                address = "wss://" + base.split("://", 1)[1] + "/link" if base.startswith("https://") else base + "/link"
+                intro += ["Each GM does this once in their Foundry (as Gamemaster):",
+                          "1. Add-on Modules > Install Module > Manifest URL:",
+                          [(base + "/foundry/module.json", HINT)],
+                          "2. Enable Nightdeck Link in the world (Manage Modules).",
+                          "3. Configure Settings > Nightdeck Link: the address and code below.",
+                          [("Address: ", DIM), (address, HINT)]]
+            else:
+                intro += ["Set up internet access first (Internet access (Tailscale)) so your friend's",
+                          "Foundry can reach the deck. On this network the deck answers at:",
+                          [(f"http://{self.host}.local:{LINK_PORT}  (local only)", HINT)]]
+            intro.append([("Code: ", DIM), (settings["token"], SEL)])
+            intro.append("Keep the code secret: it lets a Foundry world connect to your deck.")
+            choice = self.menu("CHARACTER SHEETS // link setup", ["Make a new code (GMs must enter it again)",
+                                                                 "Set the deck's address by hand", "Back"], intro=intro)
+            if choice == 0:
+                if self.menu("New link code?", ["Cancel", "Make a new code"],
+                             intro=["Connected games keep working until they reconnect; then they need the new code.",
+                                    "Restart the link service to apply it right away."]) == 1:
+                    save_link_settings(dict(settings, token=secrets.token_urlsafe(18)))
+                    user_systemctl("restart", "nightdeck-link")
+            elif choice == 1:
+                value = self.ask("LINK // https address of the deck (blank = automatic)", prefix="")
+                if value is None:
+                    continue
+                value = value.strip().rstrip("/")
+                if value and not public_url(value, ("https", "http")):
+                    self.notice("LINK", "Use a plain address like https://nightdeck.example.ts.net", ok=False)
+                    continue
+                save_link_settings(dict(settings, public_url=value))
+            else:
+                return
+
+    def link_tailscale(self):
+        while True:
+            installed, url, funnel = tailscale_status()
+            intro = ["Tailscale Funnel gives the deck a free, secure internet address, so a GM playing",
+                     "online (you or your friend) can connect their Foundry to it."]
+            options = []
+            if not installed:
+                intro.append("Tailscale isn't installed.")
+                options.append(("Install Tailscale", lambda: self.run(["sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"])
+                                if self.confirm("TAILSCALE // install", ["sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"]) else None))
+            else:
+                intro.append(("Address: " + url) if url else "Not logged in yet.")
+                intro.append("Internet access for the link: " + ("ON" if funnel else "off"))
+                options.append(("Log in to Tailscale", lambda: self.run(["sudo", "tailscale", "up"])))
+                if funnel:
+                    options.append(("Turn internet access off", lambda: self.run(
+                        ["sudo", "tailscale", "funnel", "--bg", str(LINK_PORT), "off"])))
+                else:
+                    options.append(("Turn internet access on", lambda: self.run(
+                        ["sudo", "tailscale", "funnel", "--bg", str(LINK_PORT)])))
+            options.append(("Back", None))
+            choice = self.menu("CHARACTER SHEETS // internet access", [label for label, _ in options], intro=intro)
+            if choice is None or options[choice][1] is None:
+                return
+            options[choice][1]()
+
+    def sheet_world(self, world):
+        result = link_call({"cmd": "actors", "world": world["id"]}, timeout=8)
+        if not result or not result.get("ok"):
+            self.notice("CHARACTER SHEETS", (result or {}).get("error") or "The link service stopped.", ok=False)
+            return
+        actors = sorted(result.get("actors") or [], key=lambda a: (not a.get("player"), a.get("name", "").lower()))
+        if not actors:
+            self.notice("CHARACTER SHEETS", "That game has no characters yet.", ok=False)
+            return
+        labels = [f"{a['name']}  [{a.get('type', '')}]" + (f"  {', '.join(a['owners'])}" if a.get("owners") else "")
+                  for a in actors]
+        choice = self.menu(f"SHEETS // {world.get('title')}", labels, intro=["Players' characters first."])
+        if choice is not None:
+            self.sheet(world, actors[choice])
+
+    def sheet(self, world, actor):
+        selected, waited = 0, time.monotonic()
+        while True:
+            result = link_call({"cmd": "actor", "world": world["id"], "actor": actor["id"]}, timeout=5)
+            if result is None:
+                self.notice("CHARACTER SHEETS", "The link service stopped.", ok=False)
+                return
+            if not result.get("ok"):
+                self.notice("CHARACTER SHEETS", result.get("error") or "That game disconnected.", ok=False)
+                return
+            data = result.get("data")
+            if not data:
+                if time.monotonic() - waited > 20:
+                    self.notice("CHARACTER SHEETS", "Foundry didn't send the character. Is the GM still in the game?",
+                                ok=False)
+                    return
+                if self.menu("SHEETS // " + actor.get("name", ""), ["Back"], intro=["Waiting for Foundry..."],
+                             poll=True) != -1:
+                    return
+                continue
+            last = {"world": world["id"], "actor": actor["id"], "name": clean(str(data.get("name", "")))[:120]}
+            if self.preferences.get("sheet_last") != last:
+                self.save_pref(sheet_last=last)
+            age = time.time() - float(result.get("updated") or 0)
+            if world.get("system") == "shadowrun6-eden" and isinstance(data.get("system"), dict) and "skills" in data["system"]:
+                labels, actions, intro = self.sr6_sheet(world, data, age)
+            else:
+                labels = ["Show raw data"]
+                actions = [lambda d=data: self.view("RAW // " + d.get("name", ""), json.dumps(d.get("system"), indent=1)[:200000])]
+                intro = [[(data.get("name", ""), SEL), (f"  [{data.get('type')}]  {world.get('system')}", DIM)],
+                         "This game system has no deck layout yet; the raw data is below."]
+            choice = self.menu("SHEET // " + data.get("name", "")[:40], labels, intro=intro, selected=selected, poll=True)
+            if choice == -1:
+                selected = self.last_selected
+                continue
+            if choice is None:
+                return
+            selected = choice
+            actions[choice]()
+
+    def sr6_sheet(self, world, data, age):
+        g, system = self.g, data["system"]
+
+        def num(value, default=0):
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return default
+
+        def pool(path):
+            node = system
+            for key in path:
+                node = node.get(key) if isinstance(node, dict) else None
+            return node
+        attrs = system.get("attributes") or {}
+        cells = []
+        for key, label in SR6_ATTRIBUTES:
+            node = attrs.get(key) or {}
+            value = node.get("pool", node.get("base"))
+            if key in ("mag", "res") and not num(value):
+                continue
+            text = f"{float(value):.1f}" if key == "essence" and value is not None else str(num(value))
+            cells.append(f"{label} {text}")
+        live = [(f"  {g['on']} LIVE", VIT)] if age < 120 else [(f"  {g['off']} updated {int(age // 60)} min ago", DIM)]
+        ini = system.get("initiative", {}).get("physical", {}) or {}
+        intro = [[(data.get("name", ""), SEL), (f"  {world.get('title')}", DIM)] + live,
+                 "  ".join(cells[:8]), "  ".join(cells[8:]),
+                 f"INIT {num(ini.get('pool'))}+{num(ini.get('dicePool'), 1)}d6   "
+                 f"DEF {num(pool(['defenserating', 'physical', 'pool']))}   "
+                 f"AR {num(pool(['attackrating', 'physical', 'pool']))}   "
+                 f"Nuyen {num(system.get('nuyen'))}   Karma {num(system.get('karma'))}"]
+        labels, actions = [], []
+
+        def add(label, action):
+            labels.append(label)
+            actions.append(action)
+        for kind, label in (("physical", "Physical"), ("stun", "Stun")):
+            mon = system.get(kind) or {}
+            dmg, top = num(mon.get("dmg")), max(1, num(mon.get("max"), 10))
+            boxes = g["full"] * min(dmg, top) + g["empty"] * max(0, top - dmg)
+            add(f"{label:<9} {boxes}  {dmg}/{top}", lambda k=kind, d=dmg, t=top: self.sr6_monitor(world, data, k, d, t))
+        over = system.get("overflow") or {}
+        if num(over.get("dmg")):
+            add(f"Overflow  {num(over.get('dmg'))}/{num(over.get('max'))}",
+                lambda d=num(over.get("dmg")), t=num(over.get("max"), 0): self.sr6_monitor(world, data, "overflow", d, t))
+        edge = num((system.get("edge") or {}).get("value"))
+        edge_max = min(7, num((attrs.get("edg") or {}).get("pool"), 7) or 7)
+        add(f"{'Edge':<9} {g['on'] * edge}{g['sep'] * max(0, edge_max - edge)}  {edge}/{edge_max}",
+            lambda e=edge, m=edge_max: self.sr6_edge(world, data, e, m))
+        add(f"Roll initiative  {num(ini.get('pool'))} + {num(ini.get('dicePool'), 1)}d6",
+            lambda: self.sheet_roll(world, data, f"{num(ini.get('pool'))} + {num(ini.get('dicePool'), 1)}d6",
+                                    "Initiative", pool=False))
+        for item in data.get("items") or []:
+            isys = item.get("system") or {}
+            if item.get("type") != "gear" or "dmg" not in isys:
+                continue
+            cap = num(isys.get("ammocap"))
+            label = f"{item.get('name', '')[:24]}  {num(isys.get('dmg'))}{'S' if isys.get('stun') else 'P'}  " \
+                    f"{num(isys.get('pool'))} dice" + (f"  ammo {num(isys.get('ammocount'))}/{cap}" if cap else "")
+            add(label, lambda i=item: self.sr6_weapon(world, data, i))
+        skills = system.get("skills") or {}
+        for key in sorted(skills, key=lambda k: -num((skills[k] or {}).get("pool"))):
+            skill = skills[key] or {}
+            if not num(skill.get("pool")) and not num(skill.get("points")):
+                continue
+            spec = clean(str(skill.get("specialization") or ""))
+            add(f"{key.replace('_', ' ').title():<15} {num(skill.get('pool')):>2} dice" + (f"  (+2 {spec})" if spec else ""),
+                lambda k=key, sk=skill: self.sr6_skill(world, data, k, sk))
+        add("Roll any dice pool...", lambda: self.sr6_custom(world, data))
+        add("Show raw data", lambda: self.view("RAW // " + data.get("name", ""), json.dumps(system, indent=1)[:200000]))
+        return labels, actions, intro
+
+    def sheet_update(self, world, data, changes, item=None):
+        request = {"cmd": "update_item" if item else "update", "world": world["id"], "actor": data["id"], "data": changes}
+        if item:
+            request["item"] = item
+        result = self.busy("SHEET", "Sending to Foundry", lambda: link_call(request, timeout=25))
+        if not result or not result.get("ok"):
+            self.notice("SHEET", (result or {}).get("error") or "The change didn't go through.", ok=False)
+            return False
+        return True
+
+    def sheet_roll(self, world, data, formula, flavor, pool=True):
+        request = {"cmd": "roll", "world": world["id"], "actor": data["id"], "formula": formula,
+                   "flavor": flavor, "pool": pool}
+        result = self.busy("ROLL", f"Rolling in Foundry: {flavor}", lambda: link_call(request, timeout=25))
+        if not result or not result.get("ok"):
+            self.notice("ROLL", (result or {}).get("error") or "The roll didn't go through.", ok=False)
+            return None
+        dice = " ".join(str(d) for d in result.get("dice") or [])
+        if pool:
+            hits = result.get("total", 0)
+            text = f"{flavor}: {hits} hit{'s' if hits != 1 else ''}" + ("  GLITCH!" if result.get("glitch") else "")
+        else:
+            text = f"{flavor}: {result.get('total')}"
+        self.view("ROLL // " + flavor[:40], f"# {text}\n\nDice: {dice}\n\nPosted to the Foundry chat.")
+        return result
+
+    def sr6_monitor(self, world, data, kind, dmg, top):
+        choice = self.menu(f"{kind.upper()} // {dmg}/{top} damage",
+                           ["Take 1 damage", "Take 3 damage", "Heal 1", "Heal all", "Back"])
+        change = {0: 1, 1: 3, 2: -1, 3: -dmg}.get(choice)
+        if change:
+            self.sheet_update(world, data, {f"system.{kind}.dmg": max(0, min(top, dmg + change))})
+
+    def sr6_edge(self, world, data, edge, top):
+        choice = self.menu(f"EDGE // {edge}/{top}", ["Spend 1 Edge", "Gain 1 Edge", "Back"])
+        change = {0: -1, 1: 1}.get(choice)
+        if change:
+            self.sheet_update(world, data, {"system.edge.value": max(0, min(top, edge + change))})
+
+    def sr6_skill(self, world, data, key, skill):
+        def num(value):
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return 0
+        name = key.replace("_", " ").title()
+        options = [(f"Roll {num(skill.get('pool'))} dice", num(skill.get("pool")), name)]
+        if skill.get("specialization"):
+            options.append((f"With specialization {skill['specialization']} ({num(skill.get('poolS'))} dice)",
+                            num(skill.get("poolS")), f"{name} ({skill['specialization']})"))
+        if skill.get("expertise"):
+            options.append((f"With expertise {skill['expertise']} ({num(skill.get('poolE'))} dice)",
+                            num(skill.get("poolE")), f"{name} ({skill['expertise']})"))
+        options.append(("Roll with a modifier...", None, name))
+        choice = self.menu(f"SKILL // {name}", [label for label, _, _ in options])
+        if choice is None:
+            return
+        _, dice, flavor = options[choice]
+        if dice is None:
+            value = self.ask(f"{name} // modifier, e.g. -2 or +1", prefix="")
+            try:
+                dice = num(skill.get("pool")) + int((value or "0").replace("+", ""))
+            except ValueError:
+                return
+            flavor = f"{name} ({value})"
+        if dice <= 0:
+            self.notice("ROLL", "That's zero dice.", ok=False)
+            return
+        self.sheet_roll(world, data, f"{dice}d6cs>=5", f"{data.get('name')}: {flavor}, {dice} dice")
+
+    def sr6_weapon(self, world, data, item):
+        isys = item.get("system") or {}
+        try:
+            dice, cap, count = int(isys.get("pool") or 0), int(isys.get("ammocap") or 0), int(isys.get("ammocount") or 0)
+        except (TypeError, ValueError):
+            dice, cap, count = 0, 0, 0
+        options = [f"Attack: roll {dice} dice" + (" (fires 1 round)" if cap else "")]
+        if cap:
+            options += [f"Reload ({cap} rounds)", "Set ammo..."]
+        choice = self.menu(f"WEAPON // {item.get('name', '')[:40]}", options,
+                           intro=[f"Damage {isys.get('dmg')}{'S' if isys.get('stun') else 'P'}" +
+                                  (f"   Ammo {count}/{cap}" if cap else "")])
+        if choice == 0:
+            if cap and count <= 0:
+                self.notice("WEAPON", "Out of ammo. Reload first.", ok=False)
+                return
+            if dice <= 0:
+                self.notice("ROLL", "That's zero dice.", ok=False)
+                return
+            if self.sheet_roll(world, data, f"{dice}d6cs>=5", f"{data.get('name')}: attack with {item.get('name')}, {dice} dice") and cap:
+                self.sheet_update(world, data, {"system.ammocount": count - 1}, item=item["id"])
+        elif choice == 1:
+            self.sheet_update(world, data, {"system.ammocount": cap}, item=item["id"])
+        elif choice == 2:
+            value = self.ask(f"AMMO // rounds loaded (0-{cap})", prefix="")
+            if value and value.strip().isdigit():
+                self.sheet_update(world, data, {"system.ammocount": max(0, min(cap, int(value)))}, item=item["id"])
+
+    def sr6_custom(self, world, data):
+        value = self.ask("ROLL // number of dice", prefix="")
+        if value and value.strip().isdigit() and 0 < int(value) <= 60:
+            self.sheet_roll(world, data, f"{int(value)}d6cs>=5", f"{data.get('name')}: {int(value)} dice")
+
     def audio_monitor(self):
         """Background thread: refresh the connected Bluetooth device and sound output every few seconds."""
         while True:
@@ -2890,7 +3258,11 @@ SPOTIFY_PACKAGES = ["pipewire-pulse", "libpulse0", "playerctl", "dbus-user-sessi
 
 
 def music_socket():
-    path = Path(os.environ.get("XDG_RUNTIME_DIR") or CACHE) / "nightdeck-music.sock"
+    return private_socket("music")
+
+
+def private_socket(name):
+    path = Path(os.environ.get("XDG_RUNTIME_DIR") or CACHE) / f"nightdeck-{name}.sock"
     if len(str(path)) <= 100:
         return path
     # Unix socket paths max out near 108 bytes: fall back to a private folder in /tmp.
@@ -2902,7 +3274,7 @@ def music_socket():
             raise OSError("unsafe socket folder")
     except OSError:
         return path
-    return private / "music.sock"
+    return private / f"{name}.sock"
 
 
 def mpv_ipc(*commands, timeout=0.5):
@@ -3126,6 +3498,369 @@ def user_systemctl(*args):
         return subprocess.CompletedProcess(args, 1, "", str(error))
 
 
+# ---------- Foundry VTT link (character sheets) ----------
+
+LINK_CONFIG = CONFIG / "link.json"
+LINK_PORT = int(os.environ.get("NIGHTDECK_LINK_PORT") or 3010)
+LINK_UNIT = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "systemd/user/nightdeck-link.service"
+LINK_MAX_MESSAGE = 16 * 1024 * 1024
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+SR6_ATTRIBUTES = (("bod", "BOD"), ("agi", "AGI"), ("rea", "REA"), ("str", "STR"), ("wil", "WIL"),
+                  ("log", "LOG"), ("int", "INT"), ("cha", "CHA"), ("edg", "EDG"), ("mag", "MAG"),
+                  ("res", "RES"), ("essence", "ESS"))
+
+
+def link_settings():
+    """The link code GMs paste into the Foundry module, and an optional public address."""
+    try:
+        data = json.loads(LINK_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict) or not isinstance(data.get("token"), str) or len(data["token"]) < 16:
+        data = {"token": secrets.token_urlsafe(18), "public_url": ""}
+        save_link_settings(data)
+    data.setdefault("public_url", "")
+    return data
+
+
+def save_link_settings(data):
+    CONFIG.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temp = LINK_CONFIG.with_suffix(".tmp")
+    temp.write_text(json.dumps(data), encoding="utf-8")
+    temp.chmod(0o600)
+    temp.replace(LINK_CONFIG)
+
+
+def foundry_module_source():
+    for path in (DATA / "foundry" / "nightdeck-link.js", Path(__file__).resolve().parent / "foundry" / "nightdeck-link.js"):
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+    raise OSError("The Nightdeck Link module file is missing; rerun setup.sh.")
+
+
+def foundry_manifest(base):
+    return {"id": "nightdeck-link", "title": "Nightdeck Link",
+            "description": "Streams characters to a Nightdeck cyberdeck and runs its commands (sheet changes, rolls).",
+            "version": "1.0.0", "compatibility": {"minimum": "12", "verified": "14"},
+            "authors": [{"name": "Nightdeck"}], "esmodules": ["scripts/nightdeck-link.js"],
+            "manifest": base + "/foundry/module.json", "download": base + "/foundry/module.zip"}
+
+
+def foundry_module_zip(base):
+    ws = ("wss://" + base[len("https://"):] if base.startswith("https://") else "ws://" + base[len("http://"):]) + "/link"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("module.json", json.dumps(foundry_manifest(base), indent=2))
+        archive.writestr("scripts/nightdeck-link.js", foundry_module_source().replace("__NIGHTDECK_URL__", ws))
+    return buffer.getvalue()
+
+
+def ws_accept(key):
+    return base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+
+
+def ws_send(sock, payload, opcode=1, mask=False):
+    data = payload.encode("utf-8") if isinstance(payload, str) else payload
+    head = bytearray([0x80 | opcode])
+    flag = 0x80 if mask else 0
+    if len(data) < 126:
+        head.append(flag | len(data))
+    elif len(data) < 65536:
+        head.append(flag | 126)
+        head += struct.pack(">H", len(data))
+    else:
+        head.append(flag | 127)
+        head += struct.pack(">Q", len(data))
+    if mask:
+        key = secrets.token_bytes(4)
+        head += key
+        data = bytes(b ^ key[i % 4] for i, b in enumerate(data))
+    sock.sendall(bytes(head) + data)
+
+
+def ws_recv(rfile):
+    """One message as (opcode, payload); control frames are returned as they come. None on EOF."""
+    message, kind = b"", None
+    while True:
+        head = rfile.read(2)
+        if len(head) < 2:
+            return None
+        fin, opcode = head[0] & 0x80, head[0] & 0x0F
+        masked, length = head[1] & 0x80, head[1] & 0x7F
+        if length == 126:
+            length = struct.unpack(">H", rfile.read(2))[0]
+        elif length == 127:
+            length = struct.unpack(">Q", rfile.read(8))[0]
+        if length > LINK_MAX_MESSAGE or len(message) + length > LINK_MAX_MESSAGE:
+            return None
+        key = rfile.read(4) if masked else b""
+        data = rfile.read(length)
+        if len(data) < length:
+            return None
+        if masked:
+            data = bytes(b ^ key[i % 4] for i, b in enumerate(data))
+        if opcode >= 8:
+            return opcode, data
+        if opcode in (1, 2):
+            kind = opcode
+        message += data
+        if fin:
+            return kind or 1, message
+
+
+class LinkWorld:
+    def __init__(self, sock, info, gm):
+        self.sock, self.info, self.gm = sock, info, gm
+        self.lock = threading.Lock()
+        self.actors, self.cache, self.watched, self.pending = [], {}, set(), {}
+        self.connected = time.time()
+
+    def send(self, message):
+        with self.lock:
+            ws_send(self.sock, json.dumps(message))
+
+
+class LinkHub:
+    def __init__(self, token):
+        self.token = token
+        self.worlds = {}
+        self.lock = threading.Lock()
+
+    def call(self, world_id, message, timeout=20):
+        world = self.worlds.get(world_id)
+        if not world:
+            return {"ok": False, "error": "That game isn't connected right now."}
+        request = secrets.token_hex(6)
+        event, box = threading.Event(), {}
+        world.pending[request] = (event, box)
+        try:
+            world.send(dict(message, id=request))
+            if not event.wait(timeout):
+                return {"ok": False, "error": "Foundry didn't answer in time."}
+            return box.get("result", {"ok": False})
+        except OSError:
+            return {"ok": False, "error": "The connection to Foundry dropped."}
+        finally:
+            world.pending.pop(request, None)
+
+    def local(self, request):
+        """Commands from Nightdeck's sheet over the private socket."""
+        cmd = request.get("cmd")
+        if cmd == "status":
+            return {"ok": True, "worlds": [dict(w.info, gm=w.gm, connected=w.connected, actors=len(w.actors))
+                                           for w in list(self.worlds.values())]}
+        world = self.worlds.get(request.get("world"))
+        if not world:
+            return {"ok": False, "error": "That game isn't connected right now."}
+        if cmd == "actors":
+            return {"ok": True, "actors": world.actors}
+        actor = str(request.get("actor") or "")
+        if cmd == "actor":
+            if actor not in world.watched:
+                world.watched.add(actor)
+                try:
+                    world.send({"type": "watch", "actorId": actor})
+                except OSError:
+                    pass
+            data, stamp = world.cache.get(actor, (None, 0))
+            return {"ok": True, "data": data, "updated": stamp}
+        if cmd == "update":
+            return self.call(world.info["id"], {"type": "update", "actorId": actor, "data": request.get("data") or {}})
+        if cmd == "update_item":
+            return self.call(world.info["id"], {"type": "updateItem", "actorId": actor,
+                                                "itemId": request.get("item"), "data": request.get("data") or {}})
+        if cmd == "roll":
+            return self.call(world.info["id"], {"type": "roll", "actorId": actor, "formula": request.get("formula"),
+                                                "flavor": request.get("flavor", ""), "pool": bool(request.get("pool"))})
+        return {"ok": False, "error": "Unknown command."}
+
+
+def make_link_handler(hub):
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        server_version = "NightdeckLink/1"
+
+        def log_message(self, *args):
+            pass
+
+        def base_url(self):
+            public = link_settings().get("public_url", "").rstrip("/")
+            if public:
+                return public
+            host = re.sub(r"[^A-Za-z0-9.:\-\[\]]", "", self.headers.get("Host", ""))[:200] or f"127.0.0.1:{LINK_PORT}"
+            local = host.split(":")[0] in ("127.0.0.1", "localhost", "[::1]")
+            return ("http://" if local else "https://") + host
+
+        def reply(self, code, body, kind):
+            self.send_response(code)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            if path == "/link" and self.headers.get("Upgrade", "").lower() == "websocket":
+                return self.websocket()
+            if path == "/foundry/module.json":
+                return self.reply(200, json.dumps(foundry_manifest(self.base_url()), indent=2).encode(), "application/json")
+            if path == "/foundry/module.zip":
+                try:
+                    return self.reply(200, foundry_module_zip(self.base_url()), "application/zip")
+                except OSError as error:
+                    return self.reply(500, str(error).encode(), "text/plain")
+            return self.reply(200, b"Nightdeck link is running.\n", "text/plain")
+
+        def websocket(self):
+            key = self.headers.get("Sec-WebSocket-Key", "")
+            self.send_response(101)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", ws_accept(key))
+            self.end_headers()
+            self.wfile.flush()
+            self.close_connection = True
+            sock, world = self.connection, None
+            sock.settimeout(15)
+            try:
+                first = ws_recv(self.rfile)
+                hello = json.loads(first[1]) if first and first[0] == 1 else {}
+                token = str(hello.get("token", ""))
+                info = hello.get("world") if isinstance(hello.get("world"), dict) else {}
+                if hello.get("type") != "hello" or not hmac.compare_digest(token, hub.token) or not info.get("id"):
+                    ws_send(sock, struct.pack(">H", 4001) + b"bad code", opcode=8)
+                    return
+                info = {k: clean(str(info.get(k, "")))[:120] for k in ("id", "title", "system", "systemVersion", "foundry")}
+                world = LinkWorld(sock, info, clean(str(hello.get("gm", "")))[:60])
+                with hub.lock:
+                    old = hub.worlds.get(info["id"])
+                    if old:  # carry over what the sheet is watching
+                        world.watched, world.cache = old.watched, old.cache
+                    hub.worlds[info["id"]] = world
+                world.send({"type": "welcome"})
+                for actor in list(world.watched):
+                    world.send({"type": "watch", "actorId": actor})
+                sock.settimeout(120)
+                while True:
+                    frame = ws_recv(self.rfile)
+                    if frame is None or frame[0] == 8:
+                        break
+                    if frame[0] == 9:
+                        with world.lock:
+                            ws_send(sock, frame[1], opcode=10)
+                        continue
+                    if frame[0] != 1:
+                        continue
+                    try:
+                        message = json.loads(frame[1])
+                    except ValueError:
+                        continue
+                    kind = message.get("type")
+                    if kind == "actors" and isinstance(message.get("list"), list):
+                        world.actors = [{"id": str(a.get("id", "")), "name": clean(str(a.get("name", "")))[:80],
+                                         "type": clean(str(a.get("type", "")))[:40],
+                                         "owners": [clean(str(o))[:40] for o in a.get("owners") or []][:10],
+                                         "player": bool(a.get("player"))}
+                                        for a in message["list"][:2000] if isinstance(a, dict)]
+                    elif kind == "actor" and isinstance(message.get("data"), dict):
+                        world.cache[str(message.get("actorId"))] = (message["data"], time.time())
+                    elif kind == "result" and message.get("id") in world.pending:
+                        event, box = world.pending[message["id"]]
+                        box["result"] = message
+                        event.set()
+            except (OSError, ValueError, struct.error):
+                pass
+            finally:
+                if world:
+                    with hub.lock:
+                        if hub.worlds.get(world.info["id"]) is world:
+                            del hub.worlds[world.info["id"]]
+                    for event, box in list(world.pending.values()):
+                        box["result"] = {"ok": False, "error": "The connection to Foundry dropped."}
+                        event.set()
+    return Handler
+
+
+def run_link():
+    """The link service: Foundry modules connect on LINK_PORT, Nightdeck talks over a private socket."""
+    hub = LinkHub(link_settings()["token"])
+    server = ThreadingHTTPServer(("127.0.0.1", LINK_PORT), make_link_handler(hub))
+    server.daemon_threads = True
+    path = private_socket("link")
+    path.unlink(missing_ok=True)
+
+    class Local(socketserver.StreamRequestHandler):
+        def handle(self):
+            try:
+                request = json.loads(self.rfile.readline(1024 * 1024) or b"{}")
+                answer = hub.local(request if isinstance(request, dict) else {})
+            except (ValueError, OSError) as error:
+                answer = {"ok": False, "error": str(error)}
+            self.wfile.write(json.dumps(answer).encode() + b"\n")
+
+    local = socketserver.ThreadingUnixStreamServer(str(path), Local)
+    local.daemon_threads = True
+    path.chmod(0o600)
+    threading.Thread(target=local.serve_forever, daemon=True).start()
+    print(f"Nightdeck link on http://127.0.0.1:{LINK_PORT} (Foundry module at /foundry/module.json)", flush=True)
+    try:
+        server.serve_forever()
+    finally:
+        local.shutdown()
+        path.unlink(missing_ok=True)
+
+
+def link_call(request, timeout=25):
+    """Ask the link service something; None when it isn't running."""
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(str(private_socket("link")))
+    except OSError:
+        return None
+    with sock:
+        try:
+            sock.sendall(json.dumps(request).encode() + b"\n")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = sock.recv(1 << 20)
+                if not chunk:
+                    break
+                data += chunk
+            return json.loads(data or b"{}")
+        except (OSError, ValueError):
+            return None
+
+
+def write_link_service():
+    LINK_UNIT.parent.mkdir(parents=True, exist_ok=True)
+    LINK_UNIT.write_text("\n".join([
+        "[Unit]", "Description=Nightdeck link for Foundry VTT character sheets", "After=network-online.target", "",
+        "[Service]", f"ExecStart={HOME / '.local/bin/nightdeck'} link", "Restart=on-failure", "RestartSec=5", "",
+        "[Install]", "WantedBy=default.target", ""]), encoding="utf-8")
+
+
+def tailscale_status():
+    """(installed, public https URL or '', funnel serving the link port)."""
+    if not shutil.which("tailscale"):
+        return False, "", False
+    url = ""
+    try:
+        data = json.loads(subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True,
+                                         timeout=10, check=False).stdout or "{}")
+        dns = str((data.get("Self") or {}).get("DNSName") or "").rstrip(".")
+        url = "https://" + dns if re.fullmatch(r"[A-Za-z0-9.-]+", dns) else ""
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    try:
+        out = subprocess.run(["tailscale", "funnel", "status"], capture_output=True, text=True,
+                             timeout=10, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    return True, url, "Funnel on" in out and str(LINK_PORT) in out
+
+
 def watch_file(item):
     """The downloaded file for an entry, if it is still on disk."""
     if item["file"]:
@@ -3343,6 +4078,15 @@ def command_line(args):
             return 1
         if not (shutil.which("deno") or shutil.which("qjs")):
             print("[ !! ] YouTube also needs QuickJS: sudo apt install quickjs")
+        return 0
+    if name == "link":
+        try:
+            run_link()
+        except KeyboardInterrupt:
+            pass
+        except OSError as error:
+            print(f"nightdeck link: {error}", file=sys.stderr)
+            return 1
         return 0
     if name == "fetch":
         run_downloads()
